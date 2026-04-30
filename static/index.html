@@ -1,0 +1,1224 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>K12 教育 RAG 系统</title>
+<style>
+  :root {
+    --primary: #1a56db;
+    --primary-hover: #1648c0;
+    --primary-light: #e8f0fe;
+    --green: #059669;
+    --green-light: #ecfdf5;
+    --orange: #d97706;
+    --orange-light: #fffbeb;
+    --red: #dc2626;
+    --red-light: #fef2f2;
+    --gray-50: #f9fafb;
+    --gray-100: #f3f4f6;
+    --gray-200: #e5e7eb;
+    --gray-300: #d1d5db;
+    --gray-400: #9ca3af;
+    --gray-500: #6b7280;
+    --gray-600: #4b5563;
+    --gray-700: #374151;
+    --gray-800: #1f2937;
+    --gray-900: #111827;
+    --radius: 8px;
+    --shadow: 0 1px 3px rgba(0,0,0,.08),0 1px 2px rgba(0,0,0,.06);
+    --shadow-lg: 0 10px 25px rgba(0,0,0,.08);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans SC",sans-serif;
+    background: var(--gray-50);
+    color: var(--gray-800);
+    min-height: 100vh;
+    display: flex;
+  }
+
+  /* Sidebar */
+  .sidebar {
+    width: 220px;
+    background: linear-gradient(180deg, #1a56db 0%, #1e40af 100%);
+    color: white;
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+  }
+  .sidebar-brand {
+    padding: 24px 20px 20px;
+    border-bottom: 1px solid rgba(255,255,255,.12);
+  }
+  .sidebar-brand h1 { font-size: 18px; font-weight: 700; }
+  .sidebar-brand p { font-size: 12px; opacity: .7; margin-top: 4px; }
+  .sidebar-nav { padding: 12px 0; flex: 1; }
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 20px;
+    cursor: pointer;
+    transition: all .15s;
+    font-size: 14px;
+    border: none;
+    background: none;
+    color: rgba(255,255,255,.75);
+    width: 100%;
+    text-align: left;
+  }
+  .nav-item:hover { background: rgba(255,255,255,.1); color: white; }
+  .nav-item.active {
+    background: rgba(255,255,255,.18);
+    color: white;
+    font-weight: 600;
+    border-right: 3px solid white;
+  }
+  .nav-icon { font-size: 18px; width: 24px; text-align: center; }
+  .sidebar-footer {
+    padding: 16px 20px;
+    border-top: 1px solid rgba(255,255,255,.12);
+    font-size: 12px;
+    opacity: .6;
+  }
+
+  /* Main */
+  .main {
+    flex: 1;
+    padding: 32px;
+    max-width: 1100px;
+    overflow-y: auto;
+  }
+  .main-header { margin-bottom: 28px; }
+  .main-header h2 { font-size: 24px; font-weight: 700; }
+  .main-header p { color: var(--gray-500); margin-top: 4px; font-size: 14px; }
+
+  /* Tab content */
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+
+  /* Cards */
+  .card {
+    background: white;
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    margin-bottom: 20px;
+  }
+  .card-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--gray-100);
+    font-weight: 600;
+    font-size: 15px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .card-body { padding: 20px; }
+
+  /* Forms */
+  .form-group { margin-bottom: 16px; }
+  .form-group label {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--gray-700);
+    margin-bottom: 6px;
+  }
+  .form-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  input, select, textarea {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--gray-300);
+    border-radius: 6px;
+    font-size: 14px;
+    transition: border .15s, box-shadow .15s;
+    font-family: inherit;
+    background: white;
+  }
+  input:focus, select:focus, textarea:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(26,86,219,.12);
+  }
+  textarea { resize: vertical; min-height: 80px; }
+
+  /* Buttons */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all .15s;
+    font-family: inherit;
+  }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .btn-primary { background: var(--primary); color: white; }
+  .btn-primary:hover:not(:disabled) { background: var(--primary-hover); }
+  .btn-green { background: var(--green); color: white; }
+  .btn-green:hover:not(:disabled) { background: #047857; }
+  .btn-outline {
+    background: white;
+    color: var(--gray-700);
+    border: 1px solid var(--gray-300);
+  }
+  .btn-outline:hover:not(:disabled) { background: var(--gray-50); border-color: var(--gray-400); }
+  .btn-sm { padding: 6px 12px; font-size: 13px; }
+  .btn-danger { background: var(--red); color: white; }
+  .btn-danger:hover:not(:disabled) { background: #b91c1c; }
+
+  /* Status badges */
+  .badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 100px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .badge-green { background: var(--green-light); color: var(--green); }
+  .badge-orange { background: var(--orange-light); color: var(--orange); }
+  .badge-red { background: var(--red-light); color: var(--red); }
+  .badge-blue { background: var(--primary-light); color: var(--primary); }
+
+  /* Loading spinner */
+  .spinner {
+    display: inline-block;
+    width: 18px;
+    height: 18px;
+    border: 2px solid var(--gray-300);
+    border-top-color: var(--primary);
+    border-radius: 50%;
+    animation: spin .6s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .loading-overlay {
+    display: none;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    background: var(--primary-light);
+    border-radius: 6px;
+    color: var(--primary);
+    font-size: 14px;
+    margin: 12px 0;
+  }
+  .loading-overlay.active { display: flex; }
+
+  /* Answer card */
+  .answer-area { margin-top: 20px; }
+  .answer-card {
+    background: linear-gradient(135deg, #f0f7ff 0%, #e8f4f8 100%);
+    border: 1px solid #b8d4f0;
+    border-radius: var(--radius);
+    padding: 20px;
+    display: none;
+  }
+  .answer-card.active { display: block; }
+  .answer-card .meta {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 14px;
+    font-size: 13px;
+    color: var(--gray-500);
+  }
+  .answer-card .meta-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .answer-card .answer-text {
+    font-size: 15px;
+    line-height: 1.8;
+    white-space: pre-wrap;
+    max-height: 500px;
+    overflow-y: auto;
+  }
+  .answer-card .feedback-area {
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid rgba(0,0,0,.08);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .feedback-btn {
+    padding: 6px 16px;
+    border: 1px solid var(--gray-300);
+    border-radius: 100px;
+    background: white;
+    cursor: pointer;
+    font-size: 13px;
+    transition: all .15s;
+  }
+  .feedback-btn:hover { border-color: var(--primary); }
+  .feedback-btn.selected { border-color: var(--primary); background: var(--primary-light); }
+
+  /* References */
+  .ref-item {
+    padding: 12px 16px;
+    border: 1px solid var(--gray-200);
+    border-radius: 6px;
+    margin-top: 8px;
+    font-size: 13px;
+    line-height: 1.6;
+    background: white;
+  }
+  .ref-item .ref-header {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 6px;
+    font-size: 12px;
+  }
+  .ref-item .ref-text {
+    color: var(--gray-600);
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  /* Table */
+  .table-wrap { overflow-x: auto; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+  }
+  th, td {
+    padding: 10px 12px;
+    text-align: left;
+    border-bottom: 1px solid var(--gray-200);
+  }
+  th {
+    font-weight: 600;
+    color: var(--gray-500);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    background: var(--gray-50);
+  }
+  tr:hover td { background: var(--gray-50); }
+  .empty-state {
+    text-align: center;
+    padding: 40px 20px;
+    color: var(--gray-400);
+  }
+  .empty-state .icon { font-size: 40px; margin-bottom: 12px; }
+
+  /* Alert / Toast */
+  .toast {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    padding: 12px 20px;
+    border-radius: 8px;
+    color: white;
+    font-size: 14px;
+    font-weight: 500;
+    box-shadow: var(--shadow-lg);
+    transform: translateX(120%);
+    transition: transform .3s ease;
+    z-index: 999;
+  }
+  .toast.show { transform: translateX(0); }
+  .toast-success { background: var(--green); }
+  .toast-error { background: var(--red); }
+  .toast-info { background: var(--primary); }
+
+  /* File upload */
+  .file-zone {
+    border: 2px dashed var(--gray-300);
+    border-radius: 8px;
+    padding: 30px;
+    text-align: center;
+    cursor: pointer;
+    transition: all .15s;
+    background: var(--gray-50);
+  }
+  .file-zone:hover { border-color: var(--primary); background: var(--primary-light); }
+  .file-zone.dragover { border-color: var(--primary); background: var(--primary-light); }
+  .file-zone .icon { font-size: 32px; margin-bottom: 8px; }
+  .file-zone p { color: var(--gray-500); font-size: 14px; }
+  .file-zone .filename { font-weight: 600; color: var(--gray-700); }
+
+  /* Knowledge tree */
+  .tree-node {
+    padding: 6px 0 6px 24px;
+    position: relative;
+    font-size: 14px;
+  }
+  .tree-node::before {
+    content: '';
+    position: absolute;
+    left: 8px;
+    top: 0;
+    bottom: 50%;
+    width: 16px;
+    border-left: 1px solid var(--gray-300);
+    border-bottom: 1px solid var(--gray-300);
+  }
+  .tree-root > .tree-node::before { display: none; }
+  .tree-node-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 4px;
+    background: var(--gray-100);
+    cursor: pointer;
+  }
+  .tree-node-label:hover { background: var(--primary-light); }
+  .tree-children { padding-left: 20px; }
+
+  /* Score bar */
+  .score-bar {
+    display: inline-block;
+    height: 6px;
+    border-radius: 3px;
+    background: linear-gradient(90deg, var(--green), #84cc16);
+    min-width: 20px;
+  }
+
+  /* Responsive */
+  @media (max-width: 768px) {
+    body { flex-direction: column; }
+    .sidebar {
+      width: 100%;
+      height: auto;
+      position: static;
+      flex-direction: row;
+      flex-wrap: wrap;
+      padding: 12px 16px;
+    }
+    .sidebar-brand { padding: 0; border: none; margin-right: 16px; }
+    .sidebar-brand h1 { font-size: 15px; }
+    .sidebar-brand p { display: none; }
+    .sidebar-nav { display: flex; gap: 4px; padding: 0; }
+    .nav-item { padding: 8px 12px; font-size: 13px; }
+    .sidebar-footer { display: none; }
+    .main { padding: 16px; }
+    .form-row { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="sidebar">
+  <div class="sidebar-brand">
+    <h1>K12 RAG 系统</h1>
+    <p>智能知识库问答平台</p>
+  </div>
+  <nav class="sidebar-nav">
+    <button class="nav-item active" data-tab="qa">
+      <span class="nav-icon">💬</span> RAG 问答
+    </button>
+    <button class="nav-item" data-tab="documents">
+      <span class="nav-icon">📄</span> 文档管理
+    </button>
+    <button class="nav-item" data-tab="analytics">
+      <span class="nav-icon">📊</span> 学情分析
+    </button>
+    <button class="nav-item" data-tab="knowledge">
+      <span class="nav-icon">🔖</span> 知识点
+    </button>
+  </nav>
+  <div class="sidebar-footer">v1.0.0 · FastAPI + LangGraph</div>
+</div>
+
+<div class="main">
+  <!-- ========== RAG 问答 ========== -->
+  <div class="tab-content active" id="tab-qa">
+    <div class="main-header">
+      <h2>RAG 问答</h2>
+      <p>基于知识库进行智能问答，支持自适应检索和纠错重试</p>
+    </div>
+
+    <div class="card">
+      <div class="card-header">输入问题</div>
+      <div class="card-body">
+        <div class="form-group">
+          <label for="qa-query">问题</label>
+          <textarea id="qa-query" rows="3" placeholder="输入你的问题，例如：勾股定理的公式是什么？"></textarea>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="qa-subject">学科（可选）</label>
+            <select id="qa-subject">
+              <option value="">全部学科</option>
+              <option>数学</option>
+              <option>语文</option>
+              <option>英语</option>
+              <option>物理</option>
+              <option>化学</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="qa-grade">年级（可选）</label>
+            <select id="qa-grade">
+              <option value="">全部年级</option>
+              <option>一年级</option>
+              <option>二年级</option>
+              <option>三年级</option>
+              <option>四年级</option>
+              <option>五年级</option>
+              <option>六年级</option>
+              <option>七年级</option>
+              <option>八年级</option>
+              <option>九年级</option>
+            </select>
+          </div>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+          <div style="display:flex;align-items:center;gap:12px">
+            <button class="btn btn-primary" id="btn-ask" onclick="askQuestion()">🚀 提问</button>
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:14px;color:var(--gray-600)">
+              <input type="checkbox" id="stream-toggle" onchange="onStreamToggle()">
+              <span>流式输出</span>
+            </label>
+          </div>
+          <div class="loading-overlay" id="qa-loading">
+            <span class="spinner"></span>
+            <span>正在检索并生成回答...</span>
+          </div>
+        </div>
+        <!-- 流式状态栏 -->
+        <div id="stream-status" style="display:none;margin-top:12px;padding:8px 14px;background:var(--primary-light);border-radius:6px;font-size:13px;color:var(--primary)"></div>
+      </div>
+    </div>
+
+    <div class="answer-area">
+      <div class="answer-card" id="answer-card">
+        <div class="meta" id="answer-meta"></div>
+        <div class="answer-text" id="answer-text"></div>
+        <div class="feedback-area">
+          <span style="font-size:13px;color:var(--gray-500)">这个回答有帮助吗？</span>
+          <button class="feedback-btn" onclick="sendFeedback(1)">👍 有帮助</button>
+          <button class="feedback-btn" onclick="sendFeedback(-1)">👎 没帮助</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" id="references-card" style="display:none">
+      <div class="card-header">
+        <span>📚 参考来源</span>
+        <span style="font-size:13px;color:var(--gray-400)" id="ref-count"></span>
+      </div>
+      <div class="card-body" id="references-list"></div>
+    </div>
+  </div>
+
+  <!-- ========== 文档管理 ========== -->
+  <div class="tab-content" id="tab-documents">
+    <div class="main-header">
+      <h2>文档管理</h2>
+      <p>上传教材、教辅文档到知识库，支持 PDF / Markdown / TXT 格式</p>
+    </div>
+
+    <div class="card">
+      <div class="card-header">上传文档</div>
+      <div class="card-body">
+        <div class="file-zone" id="file-zone" onclick="document.getElementById('file-input').click()">
+          <div class="icon">📄</div>
+          <p>点击选择文件，或拖拽到此处</p>
+          <p style="font-size:12px;margin-top:4px">支持 PDF / MD / TXT 格式</p>
+          <input type="file" id="file-input" accept=".pdf,.md,.txt" style="display:none" onchange="onFileSelect(event)">
+        </div>
+        <div id="file-info" style="display:none;margin-top:12px">
+          <div class="form-group">
+            <label>已选择文件</label>
+            <p style="font-weight:600" id="file-name"></p>
+          </div>
+        </div>
+        <div class="form-row" style="margin-top:16px">
+          <div class="form-group">
+            <label for="doc-subject">学科</label>
+            <select id="doc-subject">
+              <option>数学</option>
+              <option>语文</option>
+              <option>英语</option>
+              <option>物理</option>
+              <option>化学</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="doc-grade">年级</label>
+            <select id="doc-grade">
+              <option value="">不限</option>
+              <option>一年级</option>
+              <option>二年级</option>
+              <option>三年级</option>
+              <option>四年级</option>
+              <option>五年级</option>
+              <option>六年级</option>
+              <option>七年级</option>
+              <option>八年级</option>
+              <option>九年级</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="doc-chapter">章节（可选）</label>
+            <input type="text" id="doc-chapter" placeholder="如：第三章 一元一次方程">
+          </div>
+          <div class="form-group">
+            <label for="doc-strategy">切片策略</label>
+            <select id="doc-strategy">
+              <option value="recursive">递归切分（默认）</option>
+              <option value="markdown">Markdown 标题切分</option>
+              <option value="semantic">语义切分</option>
+            </select>
+          </div>
+        </div>
+        <button class="btn btn-green" onclick="uploadDocument()">📤 上传并处理</button>
+        <div class="loading-overlay" id="doc-loading">
+          <span class="spinner"></span>
+          <span>正在处理文档...</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span>文档列表</span>
+        <button class="btn btn-sm btn-outline" onclick="loadDocuments()">🔄 刷新</button>
+      </div>
+      <div class="card-body">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>标题</th>
+                <th>类型</th>
+                <th>学科</th>
+                <th>年级</th>
+                <th>切片数</th>
+                <th>状态</th>
+                <th>时间</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="doc-list-body">
+              <tr><td colspan="8" class="empty-state"><div class="icon">📄</div><p>暂无文档，上传后这里会显示</p></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== 学情分析 ========== -->
+  <div class="tab-content" id="tab-analytics">
+    <div class="main-header">
+      <h2>学情分析</h2>
+      <p>分析薄弱知识点、查看问答历史和获取复习推荐</p>
+    </div>
+
+    <div class="card">
+      <div class="card-header">学生身份</div>
+      <div class="card-body">
+        <div style="display:flex;gap:12px;align-items:end">
+          <div class="form-group" style="flex:1;margin:0">
+            <label for="analytics-user-id">学生 ID</label>
+            <input type="text" id="analytics-user-id" value="student_001" placeholder="输入学生ID">
+          </div>
+          <button class="btn btn-primary" onclick="loadAnalytics()">📊 加载分析</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="analytics-results">
+      <div class="card">
+        <div class="card-header">📉 薄弱知识点</div>
+        <div class="card-body" id="weak-points-body">
+          <div class="empty-state"><div class="icon">📊</div><p>输入学生 ID 后加载</p></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">📋 问答历史</div>
+        <div class="card-body" id="history-body">
+          <div class="empty-state"><div class="icon">📋</div><p>输入学生 ID 后加载</p></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">📖 复习推荐</div>
+        <div class="card-body" id="recommend-body">
+          <div class="empty-state"><div class="icon">📖</div><p>输入学生 ID 后加载</p></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== 知识点 ========== -->
+  <div class="tab-content" id="tab-knowledge">
+    <div class="main-header">
+      <h2>知识点管理</h2>
+      <p>管理各学科的知识点树结构</p>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
+      <div class="card">
+        <div class="card-header">
+          <span>知识点树</span>
+          <button class="btn btn-sm btn-outline" onclick="loadKnowledgeTree()">🔄 刷新</button>
+        </div>
+        <div class="card-body" id="knowledge-tree-body">
+          <div class="empty-state"><div class="icon">🔖</div><p>暂无知识点</p></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">创建知识点</div>
+        <div class="card-body">
+          <div class="form-group">
+            <label for="kp-name">名称</label>
+            <input type="text" id="kp-name" placeholder="如：一元一次方程">
+          </div>
+          <div class="form-group">
+            <label for="kp-subject">学科</label>
+            <select id="kp-subject">
+              <option>数学</option>
+              <option>语文</option>
+              <option>英语</option>
+              <option>物理</option>
+              <option>化学</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="kp-parent">父知识点 ID（可选）</label>
+            <input type="text" id="kp-parent" placeholder="留空则为根节点">
+          </div>
+          <div class="form-group">
+            <label for="kp-desc">描述（可选）</label>
+            <textarea id="kp-desc" rows="2"></textarea>
+          </div>
+          <button class="btn btn-primary" onclick="createKnowledgePoint()">✅ 创建</button>
+          <div class="loading-overlay" id="kp-loading">
+            <span class="spinner"></span>
+            <span>创建中...</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+const API_BASE = '';
+
+// ==================== Tab switching ====================
+document.querySelectorAll('.nav-item').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+  });
+});
+
+// ==================== Toast ====================
+function showToast(msg, type = 'info') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast toast-' + type;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+// ==================== File upload helpers ====================
+function onFileSelect(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  document.getElementById('file-name').textContent = file.name;
+  document.getElementById('file-info').style.display = 'block';
+}
+
+// Drag & drop
+const zone = document.getElementById('file-zone');
+zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('dragover'); });
+zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
+zone.addEventListener('drop', e => {
+  e.preventDefault();
+  zone.classList.remove('dragover');
+  const file = e.dataTransfer.files[0];
+  if (file) {
+    document.getElementById('file-input').files = e.dataTransfer.files;
+    document.getElementById('file-name').textContent = file.name;
+    document.getElementById('file-info').style.display = 'block';
+  }
+});
+
+// ==================== RAG 问答 ====================
+let lastAnswer = '';
+let lastRecordId = '';
+
+function onStreamToggle() {
+  // just visual feedback when toggling
+}
+
+async function askQuestion() {
+  const query = document.getElementById('qa-query').value.trim();
+  if (!query) { showToast('请输入问题', 'error'); return; }
+
+  const isStream = document.getElementById('stream-toggle').checked;
+  if (isStream) {
+    return askQuestionStream(query);
+  }
+  return askQuestionSync(query);
+}
+
+async function askQuestionSync(query) {
+  const btn = document.getElementById('btn-ask');
+  const loading = document.getElementById('qa-loading');
+  btn.disabled = true;
+  loading.classList.add('active');
+
+  const answerCard = document.getElementById('answer-card');
+  answerCard.classList.remove('active');
+  document.getElementById('references-card').style.display = 'none';
+
+  try {
+    const resp = await fetch(API_BASE + '/api/v1/rag/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query,
+        subject: document.getElementById('qa-subject').value || null,
+        grade: document.getElementById('qa-grade').value || null,
+        user_id: 'ui_user_' + Date.now(),
+      }),
+    });
+    const result = await resp.json();
+
+    if (result.code !== 0) {
+      showToast(result.message || '问答失败', 'error');
+      return;
+    }
+
+    const data = result.data;
+    lastAnswer = data.answer;
+    lastRecordId = data.record_id || '';
+
+    const meta = document.getElementById('answer-meta');
+    const complexityLabels = { simple: '简单', medium: '一般', complex: '复杂' };
+    meta.innerHTML = `
+      <span class="meta-item">⏱ ${data.latency_ms}ms</span>
+      <span class="meta-item">📊 复杂度: ${complexityLabels[data.complexity] || data.complexity}</span>
+      <span class="meta-item">📄 参考 ${(data.references || []).length} 篇</span>
+    `;
+
+    document.getElementById('answer-text').textContent = data.answer;
+    answerCard.classList.add('active');
+
+    renderReferences(data.references || []);
+    showToast('回答生成完成', 'success');
+  } catch (err) {
+    showToast('请求失败: ' + err.message, 'error');
+  } finally {
+    btn.disabled = false;
+    loading.classList.remove('active');
+  }
+}
+
+async function askQuestionStream(query) {
+  const btn = document.getElementById('btn-ask');
+  const statusEl = document.getElementById('stream-status');
+  const answerEl = document.getElementById('answer-text');
+  const answerCard = document.getElementById('answer-card');
+  btn.disabled = true;
+
+  answerCard.classList.remove('active');
+  document.getElementById('references-card').style.display = 'none';
+  answerEl.textContent = '';
+  statusEl.style.display = 'block';
+  statusEl.textContent = '⏳ 连接中...';
+
+  // 用 XMLHttpRequest 替代 fetch，浏览器对 XHR 的流式支持更可靠
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', API_BASE + '/api/v1/rag/ask-stream');
+  xhr.setRequestHeader('Content-Type', 'application/json');
+
+  let lastProcessed = 0;
+  let fullAnswer = '';
+  let doneData = null;
+
+  xhr.onprogress = () => {
+    const newChunk = xhr.responseText.substring(lastProcessed);
+    lastProcessed = xhr.responseText.length;
+
+    const lines = newChunk.split('\n');
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        try {
+          const data = JSON.parse(line.substring(6));
+          if (data.status) {
+            const icons = { classifying: '🔍', retrieving: '📚', generating: '✍️', evaluating: '🔎', retrying: '🔄', error: '❌' };
+            statusEl.textContent = (icons[data.status] || '•') + ' ' + data.message;
+          }
+          if (data.token) {
+            fullAnswer += data.token;
+            answerEl.textContent = fullAnswer;
+            answerCard.classList.add('active');
+          }
+          if (data.answer !== undefined) {
+            doneData = data;
+          }
+        } catch (e) { /* ignore parse errors */ }
+      }
+    }
+  };
+
+  xhr.onloadend = () => {
+    // 处理最终的 done 事件
+    if (doneData) {
+      lastAnswer = doneData.answer || fullAnswer;
+      lastRecordId = doneData.record_id || '';
+      const meta = document.getElementById('answer-meta');
+      const complexityLabels = { simple: '简单', medium: '一般', complex: '复杂' };
+      meta.innerHTML = `
+        <span class="meta-item">⏱ ${doneData.latency_ms || 0}ms</span>
+        <span class="meta-item">📊 复杂度: ${complexityLabels[doneData.complexity] || doneData.complexity || '-'}</span>
+        <span class="meta-item">📄 参考 ${(doneData.references || []).length} 篇</span>
+      `;
+      answerCard.classList.add('active');
+      renderReferences(doneData.references || []);
+      showToast('回答生成完成', 'success');
+    } else if (xhr.status !== 200) {
+      statusEl.textContent = '❌ 请求失败: ' + xhr.status;
+      showToast('流式请求失败: ' + xhr.status, 'error');
+    }
+    statusEl.textContent = '✅ 回答完成';
+    setTimeout(() => { statusEl.style.display = 'none'; }, 2000);
+    btn.disabled = false;
+  };
+
+  xhr.onerror = () => {
+    statusEl.textContent = '❌ 网络错误';
+    showToast('流式请求网络错误', 'error');
+    btn.disabled = false;
+  };
+
+  xhr.send(JSON.stringify({
+    query,
+    subject: document.getElementById('qa-subject').value || null,
+    grade: document.getElementById('qa-grade').value || null,
+    user_id: 'ui_user_' + Date.now(),
+  }));
+}
+
+function renderReferences(refs) {
+  const card = document.getElementById('references-card');
+  const list = document.getElementById('references-list');
+  document.getElementById('ref-count').textContent = refs.length + ' 条';
+  list.innerHTML = refs.length === 0
+    ? '<p style="color:var(--gray-400);font-size:14px">无引用来源</p>'
+    : refs.map((r, i) => {
+        const scorePct = Math.round((r.score || 0) * 100);
+        return `<div class="ref-item">
+          <div class="ref-header">
+            <span style="font-weight:600">[${i+1}] ${r.subject || ''} · 得分: ${r.score || 0}</span>
+            <span class="badge badge-blue">${scorePct}%</span>
+          </div>
+          <div class="ref-text">${escapeHtml(r.text || '')}</div>
+        </div>`;
+      }).join('');
+  card.style.display = 'block';
+}
+
+async function sendFeedback(val) {
+  if (!lastAnswer) { showToast('暂无回答可评价', 'error'); return; }
+  if (!lastRecordId) { showToast('暂无记录可反馈', 'error'); return; }
+  document.querySelectorAll('.feedback-btn').forEach(b => b.classList.remove('selected'));
+  event.target.classList.add('selected');
+  try {
+    const resp = await fetch(API_BASE + '/api/v1/rag/feedback?record_id=' + encodeURIComponent(lastRecordId) + '&feedback=' + val, { method: 'POST' });
+    const result = await resp.json();
+    if (result.code === 0) {
+      showToast(val === 1 ? '感谢好评！' : '感谢反馈，我们会持续优化', 'success');
+    } else {
+      showToast(result.message || '提交失败', 'error');
+    }
+  } catch (err) {
+    showToast('提交失败: ' + err.message, 'error');
+  }
+}
+
+// ==================== 文档管理 ====================
+async function uploadDocument() {
+  const fileInput = document.getElementById('file-input');
+  if (!fileInput.files.length) { showToast('请选择文件', 'error'); return; }
+
+  const formData = new FormData();
+  formData.append('file', fileInput.files[0]);
+  formData.append('subject', document.getElementById('doc-subject').value);
+  formData.append('grade', document.getElementById('doc-grade').value || '');
+  formData.append('chapter', document.getElementById('doc-chapter').value || '');
+  formData.append('strategy', document.getElementById('doc-strategy').value);
+
+  const loading = document.getElementById('doc-loading');
+  loading.classList.add('active');
+
+  try {
+    const resp = await fetch(API_BASE + '/api/v1/documents/upload', {
+      method: 'POST',
+      body: formData,
+    });
+    const result = await resp.json();
+
+    if (result.code !== 0) {
+      showToast(result.message || '上传失败', 'error');
+      return;
+    }
+
+    showToast(`上传成功! 共 ${result.data.chunk_count} 个切片`, 'success');
+    document.getElementById('file-input').value = '';
+    document.getElementById('file-info').style.display = 'none';
+    loadDocuments();
+  } catch (err) {
+    showToast('上传失败: ' + err.message, 'error');
+  } finally {
+    loading.classList.remove('active');
+  }
+}
+
+async function loadDocuments() {
+  const tbody = document.getElementById('doc-list-body');
+  tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:20px"><span class="spinner"></span> 加载中...</td></tr>';
+
+  try {
+    const resp = await fetch(API_BASE + '/api/v1/documents/list');
+    const result = await resp.json();
+    const docs = result.data || [];
+
+    if (docs.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="8" class="empty-state"><div class="icon">📄</div><p>暂无文档</p></td></tr>';
+      return;
+    }
+
+    const statusLabels = { pending: '等待', processing: '处理中', completed: '完成', failed: '失败' };
+    const statusBadges = { pending: 'badge-orange', processing: 'badge-blue', completed: 'badge-green', failed: 'badge-red' };
+
+    tbody.innerHTML = docs.map(d => {
+      const st = d.status || 'pending';
+      return `<tr>
+        <td style="font-weight:600">${escapeHtml(d.title)}</td>
+        <td>${escapeHtml(d.doc_type || '')}</td>
+        <td>${escapeHtml(d.subject)}</td>
+        <td>${escapeHtml(d.grade || '-')}</td>
+        <td>${d.chunk_count ?? 0}</td>
+        <td><span class="badge ${statusBadges[st] || 'badge-orange'}">${statusLabels[st] || st}</span></td>
+        <td style="font-size:13px;color:var(--gray-400)">${d.created_at ? d.created_at.slice(0, 10) : '-'}</td>
+        <td><button class="btn btn-sm btn-danger" onclick="deleteDocument('${d.id}')">删除</button></td>
+      </tr>`;
+    }).join('');
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="8" class="empty-state"><div class="icon">❌</div><p>加载失败: ${err.message}</p></td></tr>`;
+  }
+}
+
+async function deleteDocument(id) {
+  if (!confirm('确定删除该文档吗？（向量数据也将被删除）')) return;
+  try {
+    const resp = await fetch(API_BASE + '/api/v1/documents/' + id, { method: 'DELETE' });
+    const result = await resp.json();
+    if (result.code === 0) {
+      showToast('删除成功', 'success');
+      loadDocuments();
+    } else {
+      showToast(result.message || '删除失败', 'error');
+    }
+  } catch (err) {
+    showToast('删除失败: ' + err.message, 'error');
+  }
+}
+
+// ==================== 学情分析 ====================
+async function loadAnalytics() {
+  const uid = document.getElementById('analytics-user-id').value.trim();
+  if (!uid) { showToast('请输入学生 ID', 'error'); return; }
+
+  // Load all three sections in parallel
+  await Promise.all([
+    loadWeakPoints(uid),
+    loadHistory(uid),
+    loadRecommend(uid),
+  ]);
+}
+
+async function loadWeakPoints(uid) {
+  const body = document.getElementById('weak-points-body');
+  body.innerHTML = '<p style="text-align:center;padding:20px"><span class="spinner"></span> 加载中...</p>';
+  try {
+    const resp = await fetch(API_BASE + '/api/v1/analytics/weak-points/' + uid);
+    const result = await resp.json();
+    const points = result.data?.weak_points || [];
+    if (points.length === 0) {
+      body.innerHTML = '<div class="empty-state"><div class="icon">✅</div><p>暂无薄弱知识点</p></div>';
+      return;
+    }
+    const maxCount = Math.max(...points.map(p => p.count));
+    body.innerHTML = points.map(p => {
+      const pct = Math.round((p.count / maxCount) * 100);
+      return `<div style="margin-bottom:12px">
+        <div style="display:flex;justify-content:space-between;font-size:14px;margin-bottom:4px">
+          <span>${escapeHtml(p.subject)}</span>
+          <span style="font-weight:600">${p.count} 次差评</span>
+        </div>
+        <div style="background:var(--gray-100);border-radius:100px;height:8px;overflow:hidden">
+          <div class="score-bar" style="width:${pct}%"></div>
+        </div>
+      </div>`;
+    }).join('');
+  } catch (err) {
+    body.innerHTML = `<div class="empty-state"><div class="icon">❌</div><p>加载失败: ${err.message}</p></div>`;
+  }
+}
+
+async function loadHistory(uid) {
+  const body = document.getElementById('history-body');
+  body.innerHTML = '<p style="text-align:center;padding:20px"><span class="spinner"></span> 加载中...</p>';
+  try {
+    const resp = await fetch(API_BASE + '/api/v1/analytics/history/' + uid + '?limit=10');
+    const result = await resp.json();
+    const records = result.data?.history || [];
+    if (records.length === 0) {
+      body.innerHTML = '<div class="empty-state"><div class="icon">📋</div><p>暂无问答记录</p></div>';
+      return;
+    }
+    body.innerHTML = records.map(r => {
+      const fbLabel = r.feedback === 1 ? '👍' : r.feedback === -1 ? '👎' : '—';
+      return `<div style="padding:10px 0;border-bottom:1px solid var(--gray-100)">
+        <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+          <span style="font-weight:600;font-size:14px">Q: ${escapeHtml(r.query)}</span>
+          <span style="font-size:12px;color:var(--gray-400)">${fbLabel} · ${r.latency_ms || 0}ms</span>
+        </div>
+        <p style="font-size:13px;color:var(--gray-500)">A: ${escapeHtml(r.answer || '')}</p>
+      </div>`;
+    }).join('');
+  } catch (err) {
+    body.innerHTML = `<div class="empty-state"><div class="icon">❌</div><p>加载失败: ${err.message}</p></div>`;
+  }
+}
+
+async function loadRecommend(uid) {
+  const body = document.getElementById('recommend-body');
+  body.innerHTML = '<p style="text-align:center;padding:20px"><span class="spinner"></span> 加载中...</p>';
+  try {
+    const resp = await fetch(API_BASE + '/api/v1/analytics/recommend/' + uid);
+    const result = await resp.json();
+    const recs = result.data?.recommendations || [];
+    if (recs.length === 0) {
+      body.innerHTML = '<div class="empty-state"><div class="icon">📖</div><p>暂无复习推荐</p></div>';
+      return;
+    }
+    const weakSubj = result.data?.weak_subject || '';
+    body.innerHTML = `<p style="font-size:14px;color:var(--gray-500);margin-bottom:12px">薄弱学科: <strong>${escapeHtml(weakSubj)}</strong> · 推荐以下复习内容:</p>`
+      + recs.map((r, i) => `<div class="ref-item">
+        <div style="font-weight:600;font-size:13px;margin-bottom:4px">推荐 ${i+1} · ${escapeHtml(r.subject || '')}</div>
+        <div class="ref-text">${escapeHtml(r.text || '')}</div>
+      </div>`).join('');
+  } catch (err) {
+    body.innerHTML = `<div class="empty-state"><div class="icon">❌</div><p>加载失败: ${err.message}</p></div>`;
+  }
+}
+
+// ==================== 知识点 ====================
+async function loadKnowledgeTree() {
+  const body = document.getElementById('knowledge-tree-body');
+  body.innerHTML = '<p style="text-align:center;padding:20px"><span class="spinner"></span> 加载中...</p>';
+  try {
+    const resp = await fetch(API_BASE + '/api/v1/knowledge-points/tree');
+    const result = await resp.json();
+    const tree = result.data || [];
+    if (tree.length === 0) {
+      body.innerHTML = '<div class="empty-state"><div class="icon">🔖</div><p>暂无知识点，创建一个吧</p></div>';
+      return;
+    }
+    body.innerHTML = '<div style="padding:4px 0">' + renderTreeNodes(tree) + '</div>';
+  } catch (err) {
+    body.innerHTML = `<div class="empty-state"><div class="icon">❌</div><p>加载失败: ${err.message}</p></div>`;
+  }
+}
+
+function renderTreeNodes(nodes, depth = 0) {
+  return nodes.map(n => {
+    const childrenHtml = n.children && n.children.length ? renderTreeNodes(n.children, depth + 1) : '';
+    return `<div style="padding:3px 0 3px ${depth * 24}px">
+      <span class="tree-node-label">
+        ${n.children && n.children.length ? '📂' : '📄'}
+        ${escapeHtml(n.name)}
+        <span style="font-size:11px;color:var(--gray-400)">(${escapeHtml(n.subject || '')})</span>
+      </span>
+      ${childrenHtml}
+    </div>`;
+  }).join('');
+}
+
+async function createKnowledgePoint() {
+  const name = document.getElementById('kp-name').value.trim();
+  if (!name) { showToast('请输入知识点名称', 'error'); return; }
+
+  const loading = document.getElementById('kp-loading');
+  loading.classList.add('active');
+
+  try {
+    const resp = await fetch(API_BASE + '/api/v1/knowledge-points/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name,
+        subject: document.getElementById('kp-subject').value,
+        parent_id: document.getElementById('kp-parent').value.trim() || null,
+        description: document.getElementById('kp-desc').value.trim(),
+        sort_order: 0,
+      }),
+    });
+    const result = await resp.json();
+    if (result.code === 0) {
+      showToast('创建成功', 'success');
+      document.getElementById('kp-name').value = '';
+      document.getElementById('kp-parent').value = '';
+      document.getElementById('kp-desc').value = '';
+      loadKnowledgeTree();
+    } else {
+      showToast(result.message || '创建失败', 'error');
+    }
+  } catch (err) {
+    showToast('创建失败: ' + err.message, 'error');
+  } finally {
+    loading.classList.remove('active');
+  }
+}
+
+// ==================== Utility ====================
+function escapeHtml(str) {
+  if (!str) return '';
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+// ==================== Init ====================
+loadDocuments();
+loadKnowledgeTree();
+</script>
+</body>
+</html>

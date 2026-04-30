@@ -1,0 +1,56 @@
+# Python 虚拟环境（您的项目已有 .venv）
+.venv/
+venv/
+env/
+ENV/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# IDE 配置（PyCharm）
+.idea/
+*.iml
+.vscode/
+.DS_Store
+
+# 环境变量文件（您的项目有 .env）
+.env
+.env.local
+.env.*.local
+
+# 日志文件
+*.log
+logs/
+
+# 数据库文件
+*.db
+*.sqlite
+*.sqlite3
+
+# 项目生成文件
+datas/output/
+datas/cache/
+output/
+temp/
+
+# 模型文件（如果很大）
+*.pkl
+*.h5
+*.pth
+*.bin
+
+# 测试和覆盖率
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Jupyter Notebook（如果有）
+.ipynb_checkpoints/
+
+# 配置文件（本地特定配置）
+config.local.py
+secrets.py
