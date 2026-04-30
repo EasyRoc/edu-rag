@@ -250,8 +250,9 @@ export HF_ENDPOINT=https://hf-mirror.com
 python main.py
 
 # 8. 打开浏览器访问
-#    API 文档: http://localhost:8000/docs
-#    健康检查: http://localhost:8000/health
+#    首页 UI:  http://localhost:8000/          ← 管理后台，文档管理和问答都在这里
+#    API 文档: http://localhost:8000/docs      ← Swagger 接口调试
+#    健康检查: http://localhost:8000/health     ← 服务状态监测
 ```
 
 ### 验证服务是否正常
