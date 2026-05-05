@@ -105,7 +105,7 @@ def _split_recursive(docs: list[Document]) -> list[Document]:
         length_function=len,
     )
     chunks = splitter.split_documents(docs)
-    pass
+    return chunks
 
 
 def _split_semantic(docs: list[Document]) -> list[Document]:

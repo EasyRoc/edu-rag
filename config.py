@@ -37,6 +37,8 @@ class Settings:
     RRF_K: int = 60               # RRF 融合排名参数
     DENSE_WEIGHT: float = 0.7     # 稠密检索权重
     SPARSE_WEIGHT: float = 0.3    # 稀疏检索权重
+    # 稠密检索（Milvus COSINE）：返回值为余弦相似度，越大越相似；低于此值的结果丢弃。0 表示不按阈值过滤。
+    DENSE_MIN_SIMILARITY: float = float(os.getenv("DENSE_MIN_SIMILARITY", "0.0"))
 
     # ---------- 纠正重试 ----------
     MAX_RETRIES: int = 2           # Corrective RAG 最大重试次数
