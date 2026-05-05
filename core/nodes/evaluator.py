@@ -42,7 +42,7 @@ def evaluate_quality(
 
     # 3. 检查最高分的检索结果是否足够相关
     max_score = max(doc.get("score", 0) for doc in retrieved_docs)
-    if max_score < 0.4 and retry_count < max_retries:
+    if max_score < 0.5 and retry_count < max_retries:
         logger.warning(f"评估结果: retry — 检索相关性偏低 (max_score={max_score:.3f})")
         return "retry", f"检索结果相关性不足 (最高分: {max_score:.3f})"
 

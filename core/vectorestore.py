@@ -137,6 +137,12 @@ class K12VectorStore:
             self.bm25_corpus = []
             self.bm25 = None
             return
+        if not result:
+            self.bm25_docs = []
+            self.bm25_corpus = []
+            self.bm25 = None
+            logger.info("BM25 索引重建完成，共 0 篇文档（集合为空）")
+            return
         self.bm25_docs = result
         self.bm25_corpus = [self._tokenize(doc["chunk_text"]) for doc in result]
         self.bm25 = BM25Okapi(self.bm25_corpus)
@@ -218,10 +224,12 @@ class K12VectorStore:
             return []
         docs = []
         for hit in results[0]:
+            # Milvus metric_type=COSINE 时，distance 为余弦相似度，越大越相关（通常约 0~1）
+            sim = float(hit["distance"])
             docs.append({
                 "id": hit["id"],
                 "text": hit["entity"]["chunk_text"],
-                "score": hit["distance"],
+                "score": sim,
                 "doc_id": hit["entity"].get("doc_id", ""),
                 "subject": hit["entity"].get("subject", ""),
                 "grade": hit["entity"].get("grade", ""),
@@ -229,6 +237,13 @@ class K12VectorStore:
                 "knowledge_point": hit["entity"].get("knowledge_point", ""),
                 "_source": "dense",
             })
+        min_sim = settings.DENSE_MIN_SIMILARITY
+        if min_sim > 0:
+            before = len(docs)
+            docs = [d for d in docs if d["score"] >= min_sim]
+            logger.info(
+                f"稠密检索相似度阈值: min={min_sim:.3f}, 保留 {len(docs)}/{before} 条"
+            )
         return docs
 
     def _sparse_search(self, query: str, filter_str: str, top_k: int) -> list[dict]:

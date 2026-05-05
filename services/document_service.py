@@ -5,7 +5,7 @@ import uuid
 import time
 from datetime import datetime
 
-# from ingestion.pipeline import IngestionPipeline
+from ingestion.pipeline import IngestionPipeline
 from core.vectorestore import K12VectorStore
 from models.db_models import Document, get_session_maker
 from utils.logger import logger
@@ -16,9 +16,9 @@ DOCS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 
 class DocumentService:
     """文档管理服务"""
-    def __init__(self,vectorstore: K12VectorStore):
-        self.vectorstore = vectorstore
-        # self.pipeline = IngestionPipeline(vector_store)
+    def __init__(self, vector_store: K12VectorStore):
+        self.vector_store = vector_store
+        self.pipeline = IngestionPipeline(vector_store)
         os.makedirs(DOCS_DIR, exist_ok=True)
 
     async def upload_and_process(
