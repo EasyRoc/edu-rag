@@ -215,7 +215,7 @@ BM25 算法的 Python 实现。BM25 是经典的关键词检索算法，是 TF-I
 
 ```bash
 # 1. 克隆项目
-cd rag2
+cd edu-rag
 
 # 2. 创建虚拟环境
 python -m venv .venv
