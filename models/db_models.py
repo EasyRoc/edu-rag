@@ -68,6 +68,24 @@ class QARecord(Base):
     latency_ms = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+
+# ==================== 评估结果表 ====================
+
+class EvaluationRecord(Base):
+    """RAGAS 评估结果记录表"""
+    __tablename__ = "evaluation_records"
+
+    id = Column(String(64), primary_key=True, default=lambda: str(uuid.uuid4()))
+    task_name = Column(String(128), default="unnamed", index=True)
+    metrics = Column(JSON, default=list)           # ["faithfulness", "answer_relevancy", ...]
+    scores = Column(JSON, default=dict)            # {"faithfulness": 0.85, ...}
+    sample_count = Column(Integer, default=0)
+    samples = Column(JSON, default=list)           # 每个样本的得分详情
+    config_snapshot = Column(JSON, default=dict)   # 评估时的系统配置快照
+    elapsed_seconds = Column(Float, default=0.0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 # ==================== 数据库初始化 ====================
 _engine = None
 _session_maker = None

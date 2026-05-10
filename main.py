@@ -94,19 +94,21 @@ async def init_services(app: FastAPI):
 
 async def register_routers(app: FastAPI):
     """注册 API 路由"""
-    from api import rag, documents, knowledge, analytics
+    from api import rag, documents, knowledge, analytics, evaluation
 
     # 注入服务实例
     rag.init_router(app.state.rag_service)
     documents.init_router(app.state.document_service)
     knowledge.init_router(app.state.knowledge_service)
     analytics.init_router(app.state.analytics_service)
+    evaluation.init_router(app.state.vector_store)
 
     # 注册路由
     app.include_router(rag.router)
     app.include_router(documents.router)
     app.include_router(knowledge.router)
     app.include_router(analytics.router)
+    app.include_router(evaluation.router)
 
     logger.info("API 路由注册完成")
 
