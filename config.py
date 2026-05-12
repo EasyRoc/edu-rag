@@ -17,6 +17,10 @@ class Settings:
     LLM_BASE_URL: str = os.getenv("LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
     LLM_MODEL: str = os.getenv("LLM_MODEL", "qwen-plus")
 
+    # RAGAS / Instructor 结构化输出默认仅 1024 completion tokens，
+    # faithfulness、context_* 等指标在长回答上易被截断，可通过环境变量提高上限。
+    RAGAS_LLM_MAX_TOKENS: int = int(os.getenv("RAGAS_LLM_MAX_TOKENS", "8192"))
+
     # ---------- Milvus Lite 配置 ----------
     # 注意: 避免用 MILVUS_URI 命名（pymilvus 内部也读这个环境变量，会冲突）
     MILVUS_URI: str = os.getenv("K12_MILVUS_URI", "./milvus_k12.db")

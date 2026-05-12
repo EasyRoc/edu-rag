@@ -1,0 +1,12 @@
+{"question": "勾股定理的内容是什么？", "ground_truth": "在直角三角形中，两条直角边的平方和等于斜边的平方，即 a² + b² = c²。", "complexity": "simple", "question_type": "定义题", "subject": "数学", "grade": "初中"}
+{"question": "勾股定理如何用于计算建筑物的高度？请举例说明。", "ground_truth": "测量建筑物高度时，可利用勾股定理：在地面上选取一点，测量该点到楼底的距离（直角边a），以及该点到楼顶的视线距离（斜边c），则楼高b = √(c² - a²)。", "complexity": "complex", "question_type": "应用题", "subject": "数学", "grade": "初中"}
+{"question": "什么是勾股数？请给出3组勾股数。", "ground_truth": "勾股数是满足a² + b² = c²的正整数三元组。常见的勾股数有：(3,4,5)、(5,12,13)、(6,8,10)。", "complexity": "medium", "question_type": "定义题", "subject": "数学", "grade": "初中"}
+{"question": "光合作用中光反应阶段和暗反应阶段有什么区别？", "ground_truth": "光反应在类囊体膜上进行，需要光，水光解产生O₂、[H]和ATP；暗反应在叶绿体基质中进行，不需要光，利用[H]和ATP将CO₂固定为有机物。", "complexity": "medium", "question_type": "对比题", "subject": "生物", "grade": "高中"}
+{"question": "影响光合作用速率的环境因素有哪些？", "ground_truth": "影响光合作用速率的因素包括：光照强度、CO₂浓度、温度、水分、矿质元素等。光照和CO₂是主要限制因子，温度影响酶的活性。", "complexity": "simple", "question_type": "定义题", "subject": "生物", "grade": "高中"}
+{"question": "如果地球大气中的CO₂浓度持续升高，会对植物光合作用产生什么影响？", "ground_truth": "短期看CO₂升高会提高光合速率（CO₂施肥效应）；但长期可能导致温室效应→温度过高→气孔关闭→CO₂吸收减少，同时高温抑制酶活性，C3植物受影响更明显。", "complexity": "complex", "question_type": "开放题", "subject": "生物", "grade": "高中"}
+{"question": "什么是有理数？有理数包括哪些类型？", "ground_truth": "有理数是可以表示为两个整数之比的数，即形如 p/q 的数（p,q为整数, q≠0）。有理数包括整数、有限小数和无限循环小数。", "complexity": "simple", "question_type": "定义题", "subject": "数学", "grade": "初中"}
+{"question": "如何判断一个分数能不能化成有限小数？", "ground_truth": "将分数化为最简分数后，若分母只含质因数2和5，则该分数可化为有限小数；否则为无限循环小数。", "complexity": "medium", "question_type": "定义题", "subject": "数学", "grade": "初中"}
+{"question": "证明√2是无理数", "ground_truth": "用反证法：假设√2是有理数p/q（p,q互质），则p²=2q²，所以p²为偶数，p为偶数。设p=2k，则4k²=2q²，q²=2k²，q也为偶数。p、q均为偶数，与互质矛盾。", "complexity": "complex", "question_type": "定义题", "subject": "数学", "grade": "高中"}
+{"question": "牛顿第一定律的内容是什么？", "ground_truth": "一切物体在不受外力作用时，总保持匀速直线运动状态或静止状态，直到有外力迫使它改变这种状态为止。这也称为惯性定律。", "complexity": "simple", "question_type": "定义题", "subject": "物理", "grade": "初中"}
+{"question": "为什么刹车时乘客会向前倾？用惯性原理解释。", "ground_truth": "刹车时，车减速，但乘客上半身由于惯性仍保持原来的运动状态（向前运动），而脚已随车减速，所以身体向前倾。", "complexity": "medium", "question_type": "应用题", "subject": "物理", "grade": "初中"}
+{"question": "比较质量和惯性的区别与联系", "ground_truth": "区别：质量是物体所含物质的多少，是标量，单位kg；惯性是物体保持原有运动状态的性质，无单位。联系：质量是衡量惯性大小的唯一量度，质量越大惯性越大。", "complexity": "medium", "question_type": "对比题", "subject": "物理", "grade": "初中"}
