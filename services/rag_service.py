@@ -35,6 +35,7 @@ class RAGService:
             "evaluation_decision": "",
             "retry_count": 0,
             "max_retries": 2,
+            "_queue_id": "",
         }
 
     async def ask(
@@ -56,9 +57,10 @@ class RAGService:
         logger.info(f"过滤条件: subject={subject}, grade={grade}, user_id={user_id}")
 
         initial_state = self._build_initial_state(query, subject, grade, user_id)
+        config = {"configurable": {"thread_id": user_id or "default"}}
 
         try:
-            final_state = await self.rag_graph.ainvoke(initial_state)
+            final_state = await self.rag_graph.ainvoke(initial_state, config)
         except Exception as e:
             logger.error(f"RAG 工作流执行失败: {e}")
             return {
@@ -145,6 +147,7 @@ class RAGService:
 
         initial_state = self._build_initial_state(query, subject, grade, user_id)
         initial_state["_queue_id"] = queue_id
+        config = {"configurable": {"thread_id": user_id or "default"}}
 
         full_answer = ""
         final_state = {}
@@ -155,7 +158,7 @@ class RAGService:
             nonlocal final_state, graph_error
             try:
                 async for state in self.rag_graph.astream(
-                    initial_state, stream_mode="values"
+                    initial_state, config, stream_mode="values"
                 ):
                     final_state = state
             except Exception as e:
@@ -196,50 +199,34 @@ class RAGService:
         finally:
             _stream_queues.pop(queue_id, None)
 
-        # 检查 graph 是否出错
+        # 计算最终回答（处理不同分支）
         if graph_error:
-            yield _sse("status", {"status": "error", "message": f"执行异常: {graph_error}"})
             if not full_answer:
                 full_answer = "抱歉，回答生成过程中出现错误，请稍后重试。"
-            yield _sse("done", {
-                "answer": full_answer,
-                "references": [],
-                "latency_ms": int((time.time() - start_time) * 1000),
-                "complexity": final_state.get("complexity", ""),
-                "record_id": None,
-            })
-            return
-
-        # 闲聊直接返回
-        if final_state.get("intent") == "chitchat":
-            chitchat_answer = final_state.get("answer", full_answer)
-            yield _sse("done", {
-                "answer": chitchat_answer,
-                "references": [],
-                "latency_ms": int((time.time() - start_time) * 1000),
-                "complexity": "simple",
-                "record_id": None,
-            })
-            return
+            final_answer = full_answer
+            references = []
+            final_complexity = ""
+        elif final_state.get("intent") == "chitchat":
+            final_answer = final_state.get("answer", full_answer)
+            references = []
+            final_complexity = "simple"
+        else:
+            final_answer = final_state.get("answer", full_answer)
+            references = []
+            for doc in final_state.get("retrieved_docs", []):
+                references.append({
+                    "chunk_id": doc.get("id"),
+                    "text": doc.get("text", "")[:200],
+                    "source": doc.get("doc_id", ""),
+                    "score": round(doc.get("score", 0), 4),
+                    "subject": doc.get("subject", ""),
+                    "grade": doc.get("grade", ""),
+                })
+            final_complexity = final_state.get("complexity", "medium")
 
         elapsed = int((time.time() - start_time) * 1000)
 
-        # 使用 graph 最终状态中的 answer（可处理重试场景下 full_answer 只含第一轮的问题）
-        final_answer = final_state.get("answer", full_answer)
-
-        # 组装引用
-        references = []
-        for doc in final_state.get("retrieved_docs", []):
-            references.append({
-                "chunk_id": doc.get("id"),
-                "text": doc.get("text", "")[:200],
-                "source": doc.get("doc_id", ""),
-                "score": round(doc.get("score", 0), 4),
-                "subject": doc.get("subject", ""),
-                "grade": doc.get("grade", ""),
-            })
-
-        # 保存记录
+        # 保存数据库记录
         record_id = None
         if user_id:
             try:
@@ -249,7 +236,7 @@ class RAGService:
                     answer=final_answer,
                     subject=subject or "",
                     grade=grade or "",
-                    complexity=final_state.get("complexity", "medium"),
+                    complexity=final_complexity,
                     retrieved_chunks=references[:5],
                     latency_ms=elapsed,
                 )
@@ -261,7 +248,7 @@ class RAGService:
             "answer": final_answer,
             "references": references,
             "latency_ms": elapsed,
-            "complexity": final_state.get("complexity", "medium"),
+            "complexity": final_complexity,
             "record_id": record_id,
         })
 

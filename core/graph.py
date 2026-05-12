@@ -3,12 +3,15 @@ from typing import TypedDict, Literal
 from core.nodes.chitchat import chitchat_node
 from core.nodes.evaluator import evaluate_quality
 from core.nodes.generator import llm_generate_stream
-from core.nodes.query_classifier import classify_query, classify_intent
+from core.nodes.query_classifier import classify_query, classify_intent_async
 from core.nodes.retriever import hybrid_retrieve
 from core.stream_queue import _registry as _stream_queues
 from core.vectorestore import K12VectorStore
 from utils.logger import logger
 from langgraph.graph import StateGraph, END
+from langgraph.checkpoint.memory import MemorySaver
+
+MAX_ROUNDS = 10  # 最多保留的对话轮数
 
 # ==================== 状态定义 ====================
 class RAGState(TypedDict):
@@ -24,17 +27,29 @@ class RAGState(TypedDict):
     evaluation_decision: str  # 评估决策: accept / retry / give_up
     retry_count: int  # 当前重试次数
     max_retries: int  # 最大重试次数
+    conversation_history: list[dict]  # 短期记忆: [{"role": "user"/"assistant", "content": "..."}]
     # 运行时注入（不在 TypedDict 中声明会导致 astream 过滤掉这些 key）
     _queue_id: str  # 流式 token 队列 ID，通过全局 _stream_queues 查找
 
 
 # ==================== 图节点函数 ====================
+async def finalize_node(state: RAGState) -> dict:
+    """记忆持久化节点：将当前 Q&A 追加到 conversation_history 并裁剪"""
+    history = list(state.get("conversation_history", []))
+    history.append({"role": "user", "content": state["query"]})
+    history.append({"role": "assistant", "content": state.get("answer", "")})
+    max_msgs = MAX_ROUNDS * 2
+    if len(history) > max_msgs:
+        history = history[-max_msgs:]
+    return {"conversation_history": history}
+
+
 async def classify_node(state: RAGState) -> dict:
-    """查询分类节点：先识别意图，再对教育类查询做复杂度分级"""
+    """查询分类节点：三层意图识别 + 教育类查询复杂度分级"""
     logger.info(f"[节点] classify: query='{state['query'][:50]}'")
-    intent = classify_intent(state["query"])
-    if intent == "chitchat":
-        logger.info(f"[节点] classify: 检测到闲聊，跳过复杂度分级")
+    intent = await classify_intent_async(state["query"])
+    if intent != "educational":
+        logger.info(f"[节点] classify: 非教育类意图 ({intent})，跳过复杂度分级")
         return {"intent": intent, "complexity": "simple"}
     complexity = classify_query(state["query"])
     return {"intent": intent, "complexity": complexity}
@@ -64,6 +79,7 @@ async def generate_node(state: RAGState) -> dict:
         async for token in llm_generate_stream(
             query=state["query"],
             context_docs=state.get("retrieved_docs", []),
+            conversation_history=state.get("conversation_history", []),
         ):
             full_answer += token
             if stream_queue is not None:
@@ -153,21 +169,22 @@ def build_rag_graph(vector_store: K12VectorStore):
     workflow.add_node("evaluate", evaluate_node)
     workflow.add_node("re_retrieve", re_retrieve_with_store)
     workflow.add_node("chitchat", chitchat_node)
+    workflow.add_node("finalize", finalize_node)
 
     # 设置入口
     workflow.set_entry_point("classify")
 
     # 条件边：根据意图分流
-    #   - chitchat → 闲聊回复 → 结束
-    #   - educational → 继续 RAG 管线
+    #   - educational → 继续 RAG 管线（检索 → 生成 → 评估）
+    #   - 其它 → 闲聊回复
     def route_by_intent(state: RAGState) -> Literal["retrieve", "chitchat"]:
-        return "chitchat" if state.get("intent") == "chitchat" else "retrieve"
+        return "retrieve" if state.get("intent") == "educational" else "chitchat"
 
     workflow.add_conditional_edges("classify", route_by_intent, {
         "retrieve": "retrieve",
         "chitchat": "chitchat",
     })
-    workflow.add_edge("chitchat", END)
+    workflow.add_edge("chitchat", "finalize")
     workflow.add_edge("retrieve", "generate")
     workflow.add_edge("generate", "evaluate")
 
@@ -176,12 +193,14 @@ def build_rag_graph(vector_store: K12VectorStore):
         "evaluate",
         should_continue,
         {
-            "accept": END,
+            "accept": "finalize",
             "retry": "re_retrieve",
-            "give_up": END,
+            "give_up": "finalize",
         },
     )
     workflow.add_edge("re_retrieve", "generate")
-    app = workflow.compile()
+    workflow.add_edge("finalize", END)
+
+    app = workflow.compile(checkpointer=MemorySaver())
     logger.info("LangGraph RAG 工作流构建完成")
     return app

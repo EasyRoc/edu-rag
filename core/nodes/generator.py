@@ -81,22 +81,22 @@ async def llm_generate_stream(
     query: str,
     context_docs: list[dict],
     system_prompt: str | None = None,
+    conversation_history: list[dict] | None = None,
 ) -> AsyncGenerator[str, None]:
     """
     流式调用 LLM，逐个 token 产出回答内容。
 
     system_prompt: 自定义系统提示词，不传则使用默认的 K12 教育模板
+    conversation_history: 历史对话 [{"role": ..., "content": ...}]
     """
     if not settings.LLM_API_KEY:
         logger.warning("未配置 LLM_API_KEY，直接 yield 模拟回答")
         yield _mock_answer(query, context_docs)
         return
 
+    # 构建 messages 列表
     if system_prompt:
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": query},
-        ]
+        messages = [{"role": "system", "content": system_prompt}]
     else:
         context_parts = []
         for i, doc in enumerate(context_docs):
@@ -104,8 +104,14 @@ async def llm_generate_stream(
         context = "\n\n".join(context_parts)
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT_TEMPLATE.format(context=context, query=query)},
-            {"role": "user", "content": query},
         ]
+
+    # 注入对话历史（在 system prompt 之后，当前 query 之前）
+    if conversation_history:
+        messages.extend(conversation_history)
+
+    # 当前问题
+    messages.append({"role": "user", "content": query})
 
     logger.info(f"流式调用 LLM: model={settings.LLM_MODEL}, context_docs={len(context_docs)}")
 
