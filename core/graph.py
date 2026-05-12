@@ -1,13 +1,14 @@
 from typing import TypedDict, Literal
 
-from core.nodes.evaluator import evaluate_quality, decide_next_step
-from core.nodes.generator import llm_generate
-from core.nodes.query_classifier import classify_query
+from core.nodes.chitchat import chitchat_node
+from core.nodes.evaluator import evaluate_quality
+from core.nodes.generator import llm_generate_stream
+from core.nodes.query_classifier import classify_query, classify_intent
 from core.nodes.retriever import hybrid_retrieve
+from core.stream_queue import _registry as _stream_queues
 from core.vectorestore import K12VectorStore
 from utils.logger import logger
 from langgraph.graph import StateGraph, END
-
 
 # ==================== 状态定义 ====================
 class RAGState(TypedDict):
@@ -15,20 +16,28 @@ class RAGState(TypedDict):
     query: str  # 用户原始查询
     subject: str | None  # 学科过滤
     grade: str | None  # 年级过滤
+    intent: str  # 查询意图: educational / chitchat
     complexity: str  # 查询复杂度: simple / medium / complex
     retrieved_docs: list  # 检索结果文档列表
     answer: str  # 生成的回答
     evaluation_reason: str  # 评估结果原因
+    evaluation_decision: str  # 评估决策: accept / retry / give_up
     retry_count: int  # 当前重试次数
     max_retries: int  # 最大重试次数
+    # 运行时注入（不在 TypedDict 中声明会导致 astream 过滤掉这些 key）
+    _queue_id: str  # 流式 token 队列 ID，通过全局 _stream_queues 查找
 
 
 # ==================== 图节点函数 ====================
 async def classify_node(state: RAGState) -> dict:
-    """查询分类节点"""
+    """查询分类节点：先识别意图，再对教育类查询做复杂度分级"""
     logger.info(f"[节点] classify: query='{state['query'][:50]}'")
+    intent = classify_intent(state["query"])
+    if intent == "chitchat":
+        logger.info(f"[节点] classify: 检测到闲聊，跳过复杂度分级")
+        return {"intent": intent, "complexity": "simple"}
     complexity = classify_query(state["query"])
-    return {"complexity": complexity}
+    return {"intent": intent, "complexity": complexity}
 
 
 async def retrieve_node(state: RAGState) -> dict:
@@ -46,13 +55,25 @@ async def retrieve_node(state: RAGState) -> dict:
 
 
 async def generate_node(state: RAGState) -> dict:
-    """LLM 生成节点"""
+    """LLM 生成节点：调用 LLM 生成回答，同时通过全局队列推送 token 实现流式"""
     logger.info(f"[节点] generate: retry_count={state.get('retry_count', 0)}")
-    answer = await llm_generate(
-        query=state["query"],
-        context_docs=state.get("retrieved_docs", []),
-    )
-    return {"answer": answer}
+    queue_id = state.get("_queue_id")
+    stream_queue = _stream_queues.get(queue_id) if queue_id else None
+    full_answer = ""
+    try:
+        async for token in llm_generate_stream(
+            query=state["query"],
+            context_docs=state.get("retrieved_docs", []),
+        ):
+            full_answer += token
+            if stream_queue is not None:
+                await stream_queue.put(token)
+    finally:
+        if stream_queue is not None:
+            await stream_queue.put(None)
+
+    logger.info(f"[节点] generate: 完成，共 {len(full_answer)} 字")
+    return {"answer": full_answer}
 
 
 async def evaluate_node(state: RAGState) -> dict:
@@ -65,7 +86,7 @@ async def evaluate_node(state: RAGState) -> dict:
         retry_count=state.get("retry_count", 0),
         max_retries=state.get("max_retries", 2),
     )
-    return {"evaluation_reason": reason}
+    return {"evaluation_reason": reason, "evaluation_decision": decision}
 
 
 async def re_retrieve_node(state: RAGState) -> dict:
@@ -131,12 +152,22 @@ def build_rag_graph(vector_store: K12VectorStore):
     workflow.add_node("generate", generate_node)
     workflow.add_node("evaluate", evaluate_node)
     workflow.add_node("re_retrieve", re_retrieve_with_store)
+    workflow.add_node("chitchat", chitchat_node)
 
     # 设置入口
     workflow.set_entry_point("classify")
 
-    # 连接边
-    workflow.add_edge("classify", "retrieve")
+    # 条件边：根据意图分流
+    #   - chitchat → 闲聊回复 → 结束
+    #   - educational → 继续 RAG 管线
+    def route_by_intent(state: RAGState) -> Literal["retrieve", "chitchat"]:
+        return "chitchat" if state.get("intent") == "chitchat" else "retrieve"
+
+    workflow.add_conditional_edges("classify", route_by_intent, {
+        "retrieve": "retrieve",
+        "chitchat": "chitchat",
+    })
+    workflow.add_edge("chitchat", END)
     workflow.add_edge("retrieve", "generate")
     workflow.add_edge("generate", "evaluate")
 

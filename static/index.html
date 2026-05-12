@@ -216,6 +216,229 @@
   }
   .loading-overlay.active { display: flex; }
 
+  /* ========== Chat UI ========== */
+  .chat-layout {
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 180px);
+    min-height: 400px;
+  }
+  .chat-toolbar {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    padding: 12px 16px;
+    background: white;
+    border-radius: var(--radius) var(--radius) 0 0;
+    border: 1px solid var(--gray-200);
+    border-bottom: none;
+    flex-shrink: 0;
+  }
+  .chat-toolbar select {
+    width: auto;
+    min-width: 100px;
+    padding: 6px 10px;
+    font-size: 13px;
+  }
+  .chat-toolbar .chat-hint {
+    font-size: 12px;
+    color: var(--gray-400);
+    margin-left: auto;
+  }
+  .chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px 20px 0;
+    background: #f8fafc;
+    border: 1px solid var(--gray-200);
+    border-top: none;
+    border-bottom: none;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .chat-messages .empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--gray-400);
+  }
+  .chat-messages .empty-state .icon { font-size: 48px; margin-bottom: 12px; }
+  .chat-messages .empty-state p { font-size: 14px; }
+
+  .message {
+    display: flex;
+    gap: 12px;
+    max-width: 85%;
+    animation: fadeIn .2s ease;
+  }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+  .message.user {
+    align-self: flex-end;
+    flex-direction: row-reverse;
+  }
+  .message.assistant {
+    align-self: flex-start;
+  }
+
+  .message-avatar {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    flex-shrink: 0;
+  }
+  .message.user .message-avatar {
+    background: var(--primary);
+    color: white;
+  }
+  .message.assistant .message-avatar {
+    background: var(--green);
+    color: white;
+  }
+
+  .message-bubble {
+    padding: 12px 16px;
+    border-radius: 16px;
+    font-size: 14px;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .message.user .message-bubble {
+    background: var(--primary);
+    color: white;
+    border-bottom-right-radius: 4px;
+  }
+  .message.assistant .message-bubble {
+    background: white;
+    border: 1px solid var(--gray-200);
+    border-bottom-left-radius: 4px;
+    box-shadow: 0 1px 2px rgba(0,0,0,.04);
+  }
+  .message.assistant .message-bubble.streaming {
+    border-left: 3px solid var(--primary);
+  }
+
+  .message-meta {
+    font-size: 11px;
+    color: var(--gray-400);
+    margin-top: 4px;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .message.user .message-meta {
+    justify-content: flex-end;
+  }
+  .message.assistant .message-meta {
+    justify-content: flex-start;
+  }
+
+  .message .feedback-btns {
+    display: inline-flex;
+    gap: 4px;
+  }
+  .message .feedback-btns button {
+    padding: 2px 8px;
+    border: 1px solid var(--gray-300);
+    border-radius: 100px;
+    background: white;
+    cursor: pointer;
+    font-size: 12px;
+    transition: all .15s;
+    line-height: 1.4;
+  }
+  .message .feedback-btns button:hover { border-color: var(--primary); }
+  .message .feedback-btns button.selected { border-color: var(--primary); background: var(--primary-light); }
+
+  .chat-input-area {
+    display: flex;
+    gap: 10px;
+    padding: 16px 20px;
+    background: white;
+    border: 1px solid var(--gray-200);
+    border-top: none;
+    border-radius: 0 0 var(--radius) var(--radius);
+    flex-shrink: 0;
+  }
+  .chat-input-area textarea {
+    flex: 1;
+    min-height: 44px;
+    max-height: 120px;
+    padding: 10px 14px;
+    border: 1px solid var(--gray-300);
+    border-radius: 22px;
+    font-size: 14px;
+    resize: none;
+    outline: none;
+    font-family: inherit;
+    transition: border .15s;
+  }
+  .chat-input-area textarea:focus {
+    border-color: var(--primary);
+  }
+  .chat-input-area .btn-send {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    border: none;
+    background: var(--primary);
+    color: white;
+    font-size: 18px;
+    cursor: pointer;
+    transition: background .15s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .chat-input-area .btn-send:hover { background: var(--primary-hover); }
+  .chat-input-area .btn-send:disabled { opacity: .5; cursor: not-allowed; }
+
+  /* References panel (slide up) */
+  .refs-panel {
+    display: none;
+    background: white;
+    border: 1px solid var(--gray-200);
+    border-top: none;
+    padding: 12px 20px;
+    max-height: 200px;
+    overflow-y: auto;
+    flex-shrink: 0;
+  }
+  .refs-panel.open { display: block; }
+  .refs-panel .refs-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--gray-500);
+    margin-bottom: 8px;
+  }
+  .refs-panel .refs-header button {
+    border: none;
+    background: none;
+    color: var(--gray-400);
+    cursor: pointer;
+    font-size: 16px;
+  }
+  .ref-item-compact {
+    font-size: 12px;
+    padding: 6px 10px;
+    border-left: 3px solid var(--primary-light);
+    margin-bottom: 4px;
+    color: var(--gray-600);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
   /* Answer card */
   .answer-area { margin-top: 20px; }
   .answer-card {
@@ -441,82 +664,49 @@
 <div class="main">
   <!-- ========== RAG 问答 ========== -->
   <div class="tab-content active" id="tab-qa">
-    <div class="main-header">
-      <h2>RAG 问答</h2>
-      <p>基于知识库进行智能问答，支持自适应检索和纠错重试</p>
-    </div>
-
-    <div class="card">
-      <div class="card-header">输入问题</div>
-      <div class="card-body">
-        <div class="form-group">
-          <label for="qa-query">问题</label>
-          <textarea id="qa-query" rows="3" placeholder="输入你的问题，例如：勾股定理的公式是什么？"></textarea>
-        </div>
-        <div class="form-row">
-          <div class="form-group">
-            <label for="qa-subject">学科（可选）</label>
-            <select id="qa-subject">
-              <option value="">全部学科</option>
-              <option>数学</option>
-              <option>语文</option>
-              <option>英语</option>
-              <option>物理</option>
-              <option>化学</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <label for="qa-grade">年级（可选）</label>
-            <select id="qa-grade">
-              <option value="">全部年级</option>
-              <option>一年级</option>
-              <option>二年级</option>
-              <option>三年级</option>
-              <option>四年级</option>
-              <option>五年级</option>
-              <option>六年级</option>
-              <option>七年级</option>
-              <option>八年级</option>
-              <option>九年级</option>
-            </select>
-          </div>
-        </div>
-        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
-          <div style="display:flex;align-items:center;gap:12px">
-            <button class="btn btn-primary" id="btn-ask" onclick="askQuestion()">🚀 提问</button>
-            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:14px;color:var(--gray-600)">
-              <input type="checkbox" id="stream-toggle" onchange="onStreamToggle()">
-              <span>流式输出</span>
-            </label>
-          </div>
-          <div class="loading-overlay" id="qa-loading">
-            <span class="spinner"></span>
-            <span>正在检索并生成回答...</span>
-          </div>
-        </div>
-        <!-- 流式状态栏 -->
-        <div id="stream-status" style="display:none;margin-top:12px;padding:8px 14px;background:var(--primary-light);border-radius:6px;font-size:13px;color:var(--primary)"></div>
+    <div class="chat-layout">
+      <!-- Toolbar -->
+      <div class="chat-toolbar">
+        <select id="qa-subject">
+          <option value="">全部学科</option>
+          <option>数学</option>
+          <option>语文</option>
+          <option>英语</option>
+          <option>物理</option>
+          <option>化学</option>
+        </select>
+        <select id="qa-grade">
+          <option value="">全部年级</option>
+          <option>一年级</option><option>二年级</option><option>三年级</option>
+          <option>四年级</option><option>五年级</option><option>六年级</option>
+          <option>七年级</option><option>八年级</option><option>九年级</option>
+        </select>
+        <span class="chat-hint">按 Enter 发送，Shift+Enter 换行</span>
       </div>
-    </div>
 
-    <div class="answer-area">
-      <div class="answer-card" id="answer-card">
-        <div class="meta" id="answer-meta"></div>
-        <div class="answer-text" id="answer-text"></div>
-        <div class="feedback-area">
-          <span style="font-size:13px;color:var(--gray-500)">这个回答有帮助吗？</span>
-          <button class="feedback-btn" onclick="sendFeedback(1)">👍 有帮助</button>
-          <button class="feedback-btn" onclick="sendFeedback(-1)">👎 没帮助</button>
+      <!-- Messages -->
+      <div class="chat-messages" id="chat-messages">
+        <div class="empty-state" id="chat-empty">
+          <div class="icon">💬</div>
+          <p>你好！我是「知学助手」，请告诉我你想了解的知识吧！</p>
+          <p style="font-size:12px;margin-top:8px">例如：勾股定理的公式是什么？</p>
         </div>
       </div>
-    </div>
 
-    <div class="card" id="references-card" style="display:none">
-      <div class="card-header">
-        <span>📚 参考来源</span>
-        <span style="font-size:13px;color:var(--gray-400)" id="ref-count"></span>
+      <!-- References panel -->
+      <div class="refs-panel" id="refs-panel">
+        <div class="refs-header">
+          <span id="refs-count">📚 参考来源</span>
+          <button onclick="toggleRefs()">✕</button>
+        </div>
+        <div id="refs-list"></div>
       </div>
-      <div class="card-body" id="references-list"></div>
+
+      <!-- Input -->
+      <div class="chat-input-area">
+        <textarea id="chat-input" rows="1" placeholder="输入你的问题..." onkeydown="onInputKeydown(event)"></textarea>
+        <button class="btn-send" id="btn-send" onclick="sendMessage()">➤</button>
+      </div>
     </div>
   </div>
 
@@ -766,98 +956,143 @@ zone.addEventListener('drop', e => {
   }
 });
 
-// ==================== RAG 问答 ====================
-let lastAnswer = '';
+// ==================== 聊天界面 ====================
+let chatMessages = [];
+let isStreaming = false;
 let lastRecordId = '';
+let currentAssistantMsgIdx = -1;
 
-function onStreamToggle() {
-  // just visual feedback when toggling
-}
-
-async function askQuestion() {
-  const query = document.getElementById('qa-query').value.trim();
-  if (!query) { showToast('请输入问题', 'error'); return; }
-
-  const isStream = document.getElementById('stream-toggle').checked;
-  if (isStream) {
-    return askQuestionStream(query);
+function onInputKeydown(e) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
   }
-  return askQuestionSync(query);
 }
 
-async function askQuestionSync(query) {
-  const btn = document.getElementById('btn-ask');
-  const loading = document.getElementById('qa-loading');
-  btn.disabled = true;
-  loading.classList.add('active');
+function scrollChat() {
+  const el = document.getElementById('chat-messages');
+  el.scrollTop = el.scrollHeight;
+}
 
-  const answerCard = document.getElementById('answer-card');
-  answerCard.classList.remove('active');
-  document.getElementById('references-card').style.display = 'none';
+function addUserMessage(text) {
+  const msg = { role: 'user', content: text };
+  chatMessages.push(msg);
+  renderMessages();
+  scrollChat();
+}
 
-  try {
-    const resp = await fetch(API_BASE + '/api/v1/rag/ask', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        query,
-        subject: document.getElementById('qa-subject').value || null,
-        grade: document.getElementById('qa-grade').value || null,
-        user_id: 'ui_user_' + Date.now(),
-      }),
-    });
-    const result = await resp.json();
+function addAssistantMessage() {
+  const msg = { role: 'assistant', content: '', references: [], record_id: '', latency_ms: 0, complexity: '' };
+  chatMessages.push(msg);
+  currentAssistantMsgIdx = chatMessages.length - 1;
+  renderMessages();
+  scrollChat();
+}
 
-    if (result.code !== 0) {
-      showToast(result.message || '问答失败', 'error');
-      return;
+function updateAssistantContent(token) {
+  if (currentAssistantMsgIdx < 0 || currentAssistantMsgIdx >= chatMessages.length) return;
+  chatMessages[currentAssistantMsgIdx].content += token;
+  // Update the bubble in-place for streaming performance
+  const bubble = document.querySelector('.message.assistant:last-child .message-bubble');
+  if (bubble) {
+    bubble.textContent = chatMessages[currentAssistantMsgIdx].content;
+    scrollChat();
+  }
+}
+
+function finalizeAssistant(data) {
+  if (currentAssistantMsgIdx < 0) return;
+  const msg = chatMessages[currentAssistantMsgIdx];
+  msg.content = data.answer || msg.content;
+  msg.references = data.references || [];
+  msg.record_id = data.record_id || '';
+  msg.latency_ms = data.latency_ms || 0;
+  msg.complexity = data.complexity || '';
+  lastRecordId = msg.record_id;
+  renderMessages();
+  scrollChat();
+  currentAssistantMsgIdx = -1;
+}
+
+function renderMessages() {
+  const container = document.getElementById('chat-messages');
+  const empty = document.getElementById('chat-empty');
+
+  if (chatMessages.length === 0) {
+    if (empty) {
+      empty.style.display = 'block';
+      container.innerHTML = '';
+      container.appendChild(empty);
     }
-
-    const data = result.data;
-    lastAnswer = data.answer;
-    lastRecordId = data.record_id || '';
-
-    const meta = document.getElementById('answer-meta');
-    const complexityLabels = { simple: '简单', medium: '一般', complex: '复杂' };
-    meta.innerHTML = `
-      <span class="meta-item">⏱ ${data.latency_ms}ms</span>
-      <span class="meta-item">📊 复杂度: ${complexityLabels[data.complexity] || data.complexity}</span>
-      <span class="meta-item">📄 参考 ${(data.references || []).length} 篇</span>
-    `;
-
-    document.getElementById('answer-text').textContent = data.answer;
-    answerCard.classList.add('active');
-
-    renderReferences(data.references || []);
-    showToast('回答生成完成', 'success');
-  } catch (err) {
-    showToast('请求失败: ' + err.message, 'error');
-  } finally {
-    btn.disabled = false;
-    loading.classList.remove('active');
+    return;
   }
+  if (empty) empty.style.display = 'none';
+
+  container.innerHTML = chatMessages.map((msg, idx) => {
+    if (msg.role === 'user') {
+      return `<div class="message user">
+        <div class="message-avatar">👤</div>
+        <div>
+          <div class="message-bubble">${escapeHtml(msg.content)}</div>
+        </div>
+      </div>`;
+    } else {
+      const isLast = idx === chatMessages.length - 1;
+      const isCurrent = idx === currentAssistantMsgIdx;
+      const streamingClass = (isCurrent && isStreaming) ? 'streaming' : '';
+      const content = msg.content || (isCurrent && isStreaming ? '' : '');
+      const hasRefs = msg.references && msg.references.length > 0;
+
+      let metaHtml = '';
+      if (!isCurrent || !isStreaming) {
+        const complexityLabels = { simple: '简单', medium: '一般', complex: '复杂' };
+        const compLabel = complexityLabels[msg.complexity] || msg.complexity || '';
+        metaHtml = `<div class="message-meta">
+          ${msg.latency_ms ? `<span>⏱ ${msg.latency_ms}ms</span>` : ''}
+          ${compLabel ? `<span>📊 ${compLabel}</span>` : ''}
+          ${hasRefs ? `<span>📄 ${msg.references.length} 篇参考</span>` : ''}
+          ${msg.record_id ? `<span class="feedback-btns">
+            <button onclick="sendFeedbackChat(${idx}, 1)">👍</button>
+            <button onclick="sendFeedbackChat(${idx}, -1)">👎</button>
+          </span>` : ''}
+        </div>`;
+      }
+
+      return `<div class="message assistant">
+        <div class="message-avatar">🤖</div>
+        <div>
+          <div class="message-bubble ${streamingClass}">${escapeHtml(content)}${isCurrent && isStreaming ? '' : ''}</div>
+          ${metaHtml}
+        </div>
+      </div>`;
+    }
+  }).join('');
+
+  scrollChat();
 }
 
-async function askQuestionStream(query) {
-  const btn = document.getElementById('btn-ask');
-  const statusEl = document.getElementById('stream-status');
-  const answerEl = document.getElementById('answer-text');
-  const answerCard = document.getElementById('answer-card');
-  btn.disabled = true;
+async function sendMessage() {
+  const input = document.getElementById('chat-input');
+  const query = input.value.trim();
+  if (!query || isStreaming) return;
 
-  answerCard.classList.remove('active');
-  document.getElementById('references-card').style.display = 'none';
-  answerEl.textContent = '';
-  statusEl.style.display = 'block';
-  statusEl.textContent = '⏳ 连接中...';
+  input.value = '';
+  input.style.height = '44px';
 
-  // 用 XMLHttpRequest 替代 fetch，浏览器对 XHR 的流式支持更可靠
+  // Add user message
+  addUserMessage(query);
+
+  // Add empty assistant message for streaming
+  addAssistantMessage();
+  isStreaming = true;
+  document.getElementById('btn-send').disabled = true;
+
+  // Always use streaming API
   const xhr = new XMLHttpRequest();
   xhr.open('POST', API_BASE + '/api/v1/rag/ask-stream');
   xhr.setRequestHeader('Content-Type', 'application/json');
 
   let lastProcessed = 0;
-  let fullAnswer = '';
   let doneData = null;
 
   xhr.onprogress = () => {
@@ -870,13 +1105,13 @@ async function askQuestionStream(query) {
         try {
           const data = JSON.parse(line.substring(6));
           if (data.status) {
-            const icons = { classifying: '🔍', retrieving: '📚', generating: '✍️', evaluating: '🔎', retrying: '🔄', error: '❌' };
-            statusEl.textContent = (icons[data.status] || '•') + ' ' + data.message;
+            // Status updates shown as toast for non-streaming status
+            if (data.status === 'error') {
+              showToast('⚠️ ' + (data.message || '发生错误'), 'error');
+            }
           }
           if (data.token) {
-            fullAnswer += data.token;
-            answerEl.textContent = fullAnswer;
-            answerCard.classList.add('active');
+            updateAssistantContent(data.token);
           }
           if (data.answer !== undefined) {
             doneData = data;
@@ -887,33 +1122,30 @@ async function askQuestionStream(query) {
   };
 
   xhr.onloadend = () => {
-    // 处理最终的 done 事件
+    isStreaming = false;
+    document.getElementById('btn-send').disabled = false;
     if (doneData) {
-      lastAnswer = doneData.answer || fullAnswer;
-      lastRecordId = doneData.record_id || '';
-      const meta = document.getElementById('answer-meta');
-      const complexityLabels = { simple: '简单', medium: '一般', complex: '复杂' };
-      meta.innerHTML = `
-        <span class="meta-item">⏱ ${doneData.latency_ms || 0}ms</span>
-        <span class="meta-item">📊 复杂度: ${complexityLabels[doneData.complexity] || doneData.complexity || '-'}</span>
-        <span class="meta-item">📄 参考 ${(doneData.references || []).length} 篇</span>
-      `;
-      answerCard.classList.add('active');
-      renderReferences(doneData.references || []);
-      showToast('回答生成完成', 'success');
+      finalizeAssistant(doneData);
     } else if (xhr.status !== 200) {
-      statusEl.textContent = '❌ 请求失败: ' + xhr.status;
-      showToast('流式请求失败: ' + xhr.status, 'error');
+      showToast('请求失败: ' + xhr.status, 'error');
+      // Remove the empty assistant message
+      if (currentAssistantMsgIdx >= 0) {
+        chatMessages.pop();
+        currentAssistantMsgIdx = -1;
+        renderMessages();
+      }
     }
-    statusEl.textContent = '✅ 回答完成';
-    setTimeout(() => { statusEl.style.display = 'none'; }, 2000);
-    btn.disabled = false;
   };
 
   xhr.onerror = () => {
-    statusEl.textContent = '❌ 网络错误';
-    showToast('流式请求网络错误', 'error');
-    btn.disabled = false;
+    isStreaming = false;
+    document.getElementById('btn-send').disabled = false;
+    showToast('网络错误', 'error');
+    if (currentAssistantMsgIdx >= 0) {
+      chatMessages.pop();
+      currentAssistantMsgIdx = -1;
+      renderMessages();
+    }
   };
 
   xhr.send(JSON.stringify({
@@ -924,38 +1156,18 @@ async function askQuestionStream(query) {
   }));
 }
 
-function renderReferences(refs) {
-  const card = document.getElementById('references-card');
-  const list = document.getElementById('references-list');
-  document.getElementById('ref-count').textContent = refs.length + ' 条';
-  list.innerHTML = refs.length === 0
-    ? '<p style="color:var(--gray-400);font-size:14px">无引用来源</p>'
-    : refs.map((r, i) => {
-        const scorePct = Math.round((r.score || 0) * 100);
-        return `<div class="ref-item">
-          <div class="ref-header">
-            <span style="font-weight:600">[${i+1}] ${r.subject || ''} · 得分: ${r.score || 0}</span>
-            <span class="badge badge-blue">${scorePct}%</span>
-          </div>
-          <div class="ref-text">${escapeHtml(r.text || '')}</div>
-        </div>`;
-      }).join('');
-  card.style.display = 'block';
+function toggleRefs() {
+  document.getElementById('refs-panel').classList.toggle('open');
 }
 
-async function sendFeedback(val) {
-  if (!lastAnswer) { showToast('暂无回答可评价', 'error'); return; }
-  if (!lastRecordId) { showToast('暂无记录可反馈', 'error'); return; }
-  document.querySelectorAll('.feedback-btn').forEach(b => b.classList.remove('selected'));
-  event.target.classList.add('selected');
+async function sendFeedbackChat(msgIdx, val) {
+  if (msgIdx < 0 || msgIdx >= chatMessages.length) return;
+  const msg = chatMessages[msgIdx];
+  if (!msg.record_id) { showToast('暂无记录可反馈', 'error'); return; }
   try {
-    const resp = await fetch(API_BASE + '/api/v1/rag/feedback?record_id=' + encodeURIComponent(lastRecordId) + '&feedback=' + val, { method: 'POST' });
+    const resp = await fetch(API_BASE + '/api/v1/rag/feedback?record_id=' + encodeURIComponent(msg.record_id) + '&feedback=' + val, { method: 'POST' });
     const result = await resp.json();
-    if (result.code === 0) {
-      showToast(val === 1 ? '感谢好评！' : '感谢反馈，我们会持续优化', 'success');
-    } else {
-      showToast(result.message || '提交失败', 'error');
-    }
+    showToast(result.code === 0 ? (val === 1 ? '感谢好评！' : '感谢反馈') : (result.message || '提交失败'), result.code === 0 ? 'success' : 'error');
   } catch (err) {
     showToast('提交失败: ' + err.message, 'error');
   }
@@ -1216,9 +1428,16 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+// Auto-resize textarea
+document.getElementById('chat-input').addEventListener('input', function() {
+  this.style.height = '44px';
+  this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+});
+
 // ==================== Init ====================
 loadDocuments();
 loadKnowledgeTree();
+document.getElementById('chat-input').focus();
 </script>
 </body>
 </html>

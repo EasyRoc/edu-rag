@@ -1,25 +1,41 @@
-"""RAG 问答服务：编排 LangGraph 工作流并管理会话"""
+"""RAG 问答服务：通过 LangGraph 工作流编排问答流程"""
 
 import time
 import json
+import uuid
+import asyncio
 from typing import AsyncGenerator, Any
 
 from core.graph import RAGState
-from core.nodes.query_classifier import classify_query
-from core.nodes.retriever import hybrid_retrieve
-from core.nodes.generator import llm_generate, llm_generate_stream
-from core.nodes.evaluator import evaluate_quality
+from core.stream_queue import _registry as _stream_queues
 from core.vectorestore import K12VectorStore
 from models.db_models import QARecord, get_session_maker
 from utils.logger import logger
 
 
 class RAGService:
-    """RAG 问答服务"""
+    """RAG 问答服务，所有问答流程均通过 LangGraph 工作流编排"""
 
     def __init__(self, vector_store: K12VectorStore, rag_graph: Any):
         self.vector_store = vector_store
         self.rag_graph = rag_graph
+
+    def _build_initial_state(
+        self, query: str, subject: str | None, grade: str | None, user_id: str | None
+    ) -> dict:
+        return {
+            "query": query,
+            "subject": subject,
+            "grade": grade,
+            "intent": "",
+            "complexity": "",
+            "retrieved_docs": [],
+            "answer": "",
+            "evaluation_reason": "",
+            "evaluation_decision": "",
+            "retry_count": 0,
+            "max_retries": 2,
+        }
 
     async def ask(
         self,
@@ -30,30 +46,19 @@ class RAGService:
         stream: bool = False,
     ) -> dict:
         """
-        执行 RAG 问答流程。
+        执行 RAG 问答流程（非流式）。
 
-        返回包含 answer、references、latency_ms 等字段的字典。
+        通过 LangGraph 工作流完成意图识别 → 检索 → 生成 → 评估 → 纠错。
         """
         start_time = time.time()
         logger.info(f"========== RAG 问答开始 ==========")
         logger.info(f"问题: {query[:100]}")
         logger.info(f"过滤条件: subject={subject}, grade={grade}, user_id={user_id}")
 
-        # 执行 LangGraph 工作流
-        initial_state: RAGState = {
-            "query": query,
-            "subject": subject,
-            "grade": grade,
-            "complexity": "",
-            "retrieved_docs": [],
-            "answer": "",
-            "evaluation_reason": "",
-            "retry_count": 0,
-            "max_retries": 2,
-        }
+        initial_state = self._build_initial_state(query, subject, grade, user_id)
 
         try:
-            result = await self.rag_graph.ainvoke(initial_state)
+            final_state = await self.rag_graph.ainvoke(initial_state)
         except Exception as e:
             logger.error(f"RAG 工作流执行失败: {e}")
             return {
@@ -68,7 +73,7 @@ class RAGService:
 
         # 组装引用信息
         references = []
-        for doc in result.get("retrieved_docs", []):
+        for doc in final_state.get("retrieved_docs", []):
             references.append({
                 "chunk_id": doc.get("id"),
                 "text": doc.get("text", "")[:200],
@@ -78,7 +83,7 @@ class RAGService:
                 "grade": doc.get("grade", ""),
             })
 
-        answer = result.get("answer", "抱歉，暂时无法回答该问题。")
+        answer = final_state.get("answer", "抱歉，暂时无法回答该问题。")
 
         # 异步记录问答历史
         record_id = None
@@ -90,7 +95,7 @@ class RAGService:
                     answer=answer,
                     subject=subject or "",
                     grade=grade or "",
-                    complexity=result.get("complexity", "medium"),
+                    complexity=final_state.get("complexity", "medium"),
                     retrieved_chunks=references[:5],
                     latency_ms=elapsed,
                 )
@@ -103,7 +108,7 @@ class RAGService:
             "answer": answer,
             "references": references,
             "latency_ms": elapsed,
-            "complexity": result.get("complexity", "medium"),
+            "complexity": final_state.get("complexity", "medium"),
             "record_id": record_id,
         }
 
@@ -115,11 +120,14 @@ class RAGService:
         user_id: str | None = None,
     ) -> AsyncGenerator[bytes, None]:
         """
-        流式 RAG 问答，以 SSE 格式逐事件产出：
+        流式 RAG 问答，通过 LangGraph 工作流编排，以 SSE 格式逐事件产出。
+
+        通过 asyncio.Queue 在 graph 节点与服务之间传递 token，
+        实现边生成边推送的流式效果，同时 graph 全流程在后台运行。
 
         event: status  → 状态更新
         event: token   → 回答片段
-        event: done    → 完成（含引用元数据）
+        event: done    → 完成（含完整回答及引用元数据）
         """
         start_time = time.time()
         logger.info(f"========== RAG 流式问答开始 ==========")
@@ -130,100 +138,98 @@ class RAGService:
             payload = f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
             return payload.encode("utf-8")
 
-        # ---------- 分类 ----------
-        yield _sse("status", {"status": "classifying", "message": "正在分析问题复杂度..."})
-        complexity = classify_query(query)
-        logger.info(f"查询分类: {complexity}")
-        yield _sse("status", {"status": "classifying", "message": f"问题分类完成: {complexity}"})
+        # 创建 token 队列，通过全局注册表传递（避免 Queue 直接放入 LangGraph state 导致深拷贝失败）
+        queue_id = str(uuid.uuid4())
+        stream_queue: asyncio.Queue = asyncio.Queue()
+        _stream_queues[queue_id] = stream_queue
 
-        # ---------- 检索 ----------
-        top_k_map = {"simple": 3, "medium": 5, "complex": 8}
-        top_k = top_k_map.get(complexity, 5)
-        yield _sse("status", {"status": "retrieving", "message": f"正在检索相关知识库 (top_k={top_k})..."})
-        try:
-            docs = hybrid_retrieve(
-                vector_store=self.vector_store,
-                query=query,
-                complexity=complexity,
-                subject=subject,
-                grade=grade,
-            )
-        except Exception as e:
-            logger.error(f"检索失败: {e}")
-            yield _sse("status", {"status": "error", "message": f"检索失败: {e}"})
-            yield _sse("done", {"answer": f"检索失败: {e}", "references": [], "complexity": complexity})
-            return
+        initial_state = self._build_initial_state(query, subject, grade, user_id)
+        initial_state["_queue_id"] = queue_id
 
-        if not docs:
-            yield _sse("status", {"status": "retrieving", "message": "未检索到相关文档"})
-            yield _sse("done", {"answer": "未检索到相关文档", "references": [], "complexity": complexity})
-            return
-
-        yield _sse("status", {"status": "retrieving", "message": f"检索到 {len(docs)} 篇相关文档"})
-
-        # ---------- 生成（流式） ----------
-        yield _sse("status", {"status": "generating", "message": "正在生成回答..."})
-
-        max_retries = 2
-        retry_count = 0
         full_answer = ""
+        final_state = {}
+        graph_error = None
 
-        while True:
-            # 流式生成
-            token_count = 0
-            async for token in llm_generate_stream(query=query, context_docs=docs):
-                yield _sse("token", {"token": token})
+        async def _run_graph():
+            """后台运行 LangGraph 工作流，状态通过 astream 收集"""
+            nonlocal final_state, graph_error
+            try:
+                async for state in self.rag_graph.astream(
+                    initial_state, stream_mode="values"
+                ):
+                    final_state = state
+            except Exception as e:
+                graph_error = e
+                logger.error(f"RAG 后台工作流异常: {e}")
+
+        # 启动后台 graph 任务
+        graph_task = asyncio.create_task(_run_graph())
+
+        try:
+            # 先发送初始状态
+            yield _sse("status", {
+                "status": "classifying",
+                "message": "正在分析问题...",
+            })
+
+            # 从队列中读取 token，直到收到 None 标记
+            while True:
+                token = await stream_queue.get()
+                if token is None:
+                    break
                 full_answer += token
-                token_count += 1
+                # 首次收到 token 时，发送"生成中"状态
+                if len(full_answer) == len(token):
+                    yield _sse("status", {
+                        "status": "generating",
+                        "message": "正在生成回答...",
+                    })
+                yield _sse("token", {"token": token})
 
-            logger.info(f"流式生成完成，共 {token_count} 个片段")
+            # 等待 graph 完全结束
+            await graph_task
 
-            # ---------- 评估 ----------
-            yield _sse("status", {"status": "evaluating", "message": "正在评估回答质量..."})
-            decision, reason = evaluate_quality(
-                query=query,
-                answer=full_answer,
-                retrieved_docs=docs,
-                retry_count=retry_count,
-                max_retries=max_retries,
-            )
+        except asyncio.CancelledError:
+            graph_task.cancel()
+            logger.warning("流式请求被取消")
+            return
+        finally:
+            _stream_queues.pop(queue_id, None)
 
-            if decision == "accept":
-                logger.info("回答评估通过")
-                break
-            elif decision == "retry":
-                retry_count += 1
-                logger.info(f"回答评估不通过，重试第 {retry_count} 次...")
-                yield _sse("status", {
-                    "status": "retrying",
-                    "message": f"回答质量不足，正在重新检索并生成 (重试 {retry_count}/{max_retries})...",
-                })
-                # 重新检索（扩大范围）
-                from core.nodes.retriever import hybrid_retrieve as re_retrieve
-                docs = hybrid_retrieve(
-                    vector_store=self.vector_store,
-                    query=query,
-                    complexity="complex",
-                    subject=subject,
-                    grade=grade,
-                )
-                yield _sse("status", {
-                    "status": "retrying",
-                    "message": f"重新检索完成，共 {len(docs)} 篇文档，正在重新生成...",
-                })
-                full_answer = ""
-                continue
-            else:
-                logger.info("回答评估不通过，放弃重试")
-                if not full_answer:
-                    full_answer = "未找到相关信息"
-                break
+        # 检查 graph 是否出错
+        if graph_error:
+            yield _sse("status", {"status": "error", "message": f"执行异常: {graph_error}"})
+            if not full_answer:
+                full_answer = "抱歉，回答生成过程中出现错误，请稍后重试。"
+            yield _sse("done", {
+                "answer": full_answer,
+                "references": [],
+                "latency_ms": int((time.time() - start_time) * 1000),
+                "complexity": final_state.get("complexity", ""),
+                "record_id": None,
+            })
+            return
+
+        # 闲聊直接返回
+        if final_state.get("intent") == "chitchat":
+            chitchat_answer = final_state.get("answer", full_answer)
+            yield _sse("done", {
+                "answer": chitchat_answer,
+                "references": [],
+                "latency_ms": int((time.time() - start_time) * 1000),
+                "complexity": "simple",
+                "record_id": None,
+            })
+            return
 
         elapsed = int((time.time() - start_time) * 1000)
 
+        # 使用 graph 最终状态中的 answer（可处理重试场景下 full_answer 只含第一轮的问题）
+        final_answer = final_state.get("answer", full_answer)
+
         # 组装引用
         references = []
-        for doc in docs:
+        for doc in final_state.get("retrieved_docs", []):
             references.append({
                 "chunk_id": doc.get("id"),
                 "text": doc.get("text", "")[:200],
@@ -240,10 +246,10 @@ class RAGService:
                 record_id = await self._save_qa_record(
                     user_id=user_id,
                     query=query,
-                    answer=full_answer,
+                    answer=final_answer,
                     subject=subject or "",
                     grade=grade or "",
-                    complexity=complexity,
+                    complexity=final_state.get("complexity", "medium"),
                     retrieved_chunks=references[:5],
                     latency_ms=elapsed,
                 )
@@ -252,10 +258,10 @@ class RAGService:
 
         logger.info(f"========== RAG 流式问答结束 (耗时: {elapsed}ms) ==========")
         yield _sse("done", {
-            "answer": full_answer,
+            "answer": final_answer,
             "references": references,
             "latency_ms": elapsed,
-            "complexity": complexity,
+            "complexity": final_state.get("complexity", "medium"),
             "record_id": record_id,
         })
 

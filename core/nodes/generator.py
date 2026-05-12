@@ -77,27 +77,35 @@ async def llm_generate(query: str, context_docs: list[dict]) -> str:
 
 
 
-async def llm_generate_stream(query: str, context_docs: list[dict]) -> AsyncGenerator[str, None]:
+async def llm_generate_stream(
+    query: str,
+    context_docs: list[dict],
+    system_prompt: str | None = None,
+) -> AsyncGenerator[str, None]:
     """
     流式调用 LLM，逐个 token 产出回答内容。
 
-    使用 httpx 的 stream 模式调用 /chat/completions 接口，
-    解析 SSE 格式的流式响应，逐个 token yield 返回。
+    system_prompt: 自定义系统提示词，不传则使用默认的 K12 教育模板
     """
     if not settings.LLM_API_KEY:
         logger.warning("未配置 LLM_API_KEY，直接 yield 模拟回答")
         yield _mock_answer(query, context_docs)
         return
 
-    context_parts = []
-    for i, doc in enumerate(context_docs):
-        context_parts.append(f"[{i+1}] {doc['text']}")
-    context = "\n\n".join(context_parts)
-
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT_TEMPLATE.format(context=context, query=query)},
-        {"role": "user", "content": query},
-    ]
+    if system_prompt:
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": query},
+        ]
+    else:
+        context_parts = []
+        for i, doc in enumerate(context_docs):
+            context_parts.append(f"[{i+1}] {doc['text']}")
+        context = "\n\n".join(context_parts)
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT_TEMPLATE.format(context=context, query=query)},
+            {"role": "user", "content": query},
+        ]
 
     logger.info(f"流式调用 LLM: model={settings.LLM_MODEL}, context_docs={len(context_docs)}")
 
