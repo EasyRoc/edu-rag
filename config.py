@@ -25,6 +25,12 @@ class Settings:
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-zh-v1.5")
     EMBEDDING_DEVICE: str = os.getenv("EMBEDDING_DEVICE", "cpu")
 
+    # ---------- 意图识别配置 ----------
+    CONFIDENCE_THRESHOLD: float = 0.7    # BERT 结果可接受的最低置信度
+    BERT_MAX_LENGTH: int = 128           # BERT 输入的最大 token 长度
+    LLM_TIMEOUT_SECONDS: int = 3         # LLM 分类调用超时
+    ENABLE_LLM_FALLBACK: bool = True     # 是否启用 LLM 兜底
+
     # ---------- 应用配置 ----------
     APP_HOST: str = os.getenv("APP_HOST", "0.0.0.0")
     APP_PORT: int = int(os.getenv("APP_PORT", "8000"))

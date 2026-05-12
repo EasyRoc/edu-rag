@@ -962,6 +962,16 @@ let isStreaming = false;
 let lastRecordId = '';
 let currentAssistantMsgIdx = -1;
 
+const SESSION_USER_ID = (() => {
+  const key = 'k12_session_uid';
+  let uid = sessionStorage.getItem(key);
+  if (!uid) {
+    uid = 'ui_' + crypto.randomUUID();
+    sessionStorage.setItem(key, uid);
+  }
+  return uid;
+})();
+
 function onInputKeydown(e) {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
@@ -1152,7 +1162,7 @@ async function sendMessage() {
     query,
     subject: document.getElementById('qa-subject').value || null,
     grade: document.getElementById('qa-grade').value || null,
-    user_id: 'ui_user_' + Date.now(),
+    user_id: SESSION_USER_ID,
   }));
 }
 
