@@ -13,6 +13,7 @@
 - [Web 控制台与 API](#web-控制台与-api)
 - [RAGAS 评估](#ragas-评估)
 - [数据持久化与本地资源](#数据持久化与本地资源)
+- [测试集 manual_v1.jsonl](#manual_v1jsonl)
 - [配置参考](#配置参考)
 - [仓库结构](#仓库结构)
 - [检索与流水线说明](#检索与流水线说明)
@@ -304,7 +305,31 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 |------|------|
 | [`sample_docs/`](sample_docs/) | 语文/数学等小样本教材片段，可配合「文档上传」走通入库与问答 |
 | [`evaluation/sample_test.json`](evaluation/sample_test.json) | 含 `question` / `contexts` / `ground_truth` 的 JSON 示例，适合理解 RAGAS 输入形态 |
-| [`data/test_sets/`](data/test_sets/) | 项目内维护的 JSONL 等测试集文件（若存在） |
+| [`data/test_sets/manual_v1.jsonl`](data/test_sets/manual_v1.jsonl) | 手工编写的多科问答测试集，见下节说明 |
+
+### manual_v1.jsonl
+
+文件路径：**[`data/test_sets/manual_v1.jsonl`](data/test_sets/manual_v1.jsonl)**。
+
+**定位**：面向 RAG 联调与 RAGAS 回归的 **小规模人工基准集**（当前 **12** 条），覆盖数学、生物、物理，年级以初中、高中为主；题型包含定义、应用、对比与开放问答等，并标注了预期 **查询复杂度**（与系统内 `simple` / `medium` / `complex` 概念对齐，便于观察检索深度差异）。
+
+**格式**：JSONL，**每行一个 JSON 对象**，字段如下。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `question` | string | 用户问题（必填；实时评估时由 RAG 生成 `answer` 与 `contexts`） |
+| `ground_truth` | string | 参考答案（用于 `context_recall` 等需标准答案的指标） |
+| `complexity` | string | 标注难度：`simple` / `medium` / `complex`（元数据，当前流水线以分类器结果为准，可用于筛题或扩展脚本） |
+| `question_type` | string | 题型标签，如「定义题」「应用题」「对比题」「开放题」 |
+| `subject` | string | 学科，如「数学」「生物」「物理」 |
+| `grade` | string | 学段标签，如「初中」「高中」 |
+
+**使用方式**：
+
+- **Web 控制台**：在「效果评估」中粘贴该文件全文或上传文件；可选学科/年级与 RAGAS 指标。系统会按行调用 RAG，再对生成结果打分；含 `ground_truth` 时可勾选 **`context_recall`**。  
+- **命令行**：例如 `python evaluation/cli.py evaluate --from-file data/test_sets/manual_v1.jsonl --live --metrics faithfulness,answer_relevancy`（`--live` 需已初始化向量库，参见 `evaluation/cli.py`）。
+
+**注意**：评分质量强依赖知识库中是否已有与题目相关的入库文档；若检索为空，上下文类指标会失真。扩展该文件时请保持 **一行一 JSON**、键名与上表一致。
 
 ---
 
