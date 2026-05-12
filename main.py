@@ -169,13 +169,13 @@ def init_rag_graph_sync(vector_store):
     return graph
 
 
+# 在模块级别同步初始化（避免放在 __main__ 里导致 uvicorn main:app 时跳过）
+# 关键：Milvus Lite 启动本地服务进程，不能在 asyncio 循环内执行
+_vector_store = init_vector_store_sync()
+_rag_graph = init_rag_graph_sync(_vector_store)
+
 if __name__ == "__main__":
     import uvicorn
-
-    # 在 uvicorn 启动之前，同步初始化 Milvus Lite 和 LangGraph
-    # 这是关键：Milvus Lite 启动本地服务进程，不能在 asyncio 循环内执行
-    _vector_store = init_vector_store_sync()
-    _rag_graph = init_rag_graph_sync(_vector_store)
     logger.info(f"启动服务器: {settings.APP_HOST}:{settings.APP_PORT}")
     uvicorn.run(
         app,
