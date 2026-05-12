@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+import json
+import io
+
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 
 from config import settings
 from evaluation.dataset_builder import EvalDatasetBuilder
@@ -44,6 +47,66 @@ async def evaluate_from_history(
         dataset=dataset,
         name=f"from_history_{subject or 'all'}",
         metrics=metric_list,
+    )
+    return AskResponse(data=eval_result_to_dict(result))
+
+
+# ----------------------------------------------------------------
+# 上传测试集内容并评估
+# ----------------------------------------------------------------
+def _parse_testset(raw: str) -> list[dict]:
+    """解析 JSON 或 JSONL 内容"""
+    raw = raw.strip()
+    if raw.startswith("{"):
+        items = [json.loads(line) for line in raw.splitlines() if line.strip()]
+        # 单对象 JSONL or 纯JSON对象
+        if len(items) == 1 and isinstance(items[0], dict):
+            return [items[0]]
+        return items
+    if raw.startswith("["):
+        items = json.loads(raw)
+        return items if isinstance(items, list) else [items]
+    return []
+
+
+@router.post("/from-content", response_model=AskResponse)
+async def evaluate_from_content(
+    file: UploadFile | None = File(None, description="上传 JSON/JSONL 测试集文件"),
+    content: str | None = Form(None, description="直接粘贴的 JSON/JSONL 内容"),
+    metrics: str | None = Form(None, description="评估指标，逗号分隔"),
+    subject: str | None = Form(None),
+    grade: str | None = Form(None),
+):
+    """上传测试集文件或粘贴内容，运行实时评估（先 RAG 回答再 RAGAS 打分）"""
+    if _vector_store is None:
+        raise HTTPException(status_code=503, detail="向量存储未初始化")
+
+    raw = ""
+    if file:
+        raw = (await file.read()).decode("utf-8").strip()
+    elif content:
+        raw = content.strip()
+    else:
+        raise HTTPException(status_code=400, detail="请上传文件或粘贴测试集内容")
+
+    items = _parse_testset(raw)
+    if not items:
+        raise HTTPException(status_code=400, detail="无法解析测试集内容，请检查 JSON/JSONL 格式")
+
+    questions = [it.get("question", "") for it in items if it.get("question")]
+    ground_truths = [it.get("ground_truth", "") for it in items if it.get("question")]
+    if not questions:
+        raise HTTPException(status_code=400, detail="测试集中没有有效的 question 字段")
+
+    metric_list = metrics.split(",") if metrics else None
+    result = await run_live_evaluation(
+        questions=questions,
+        vector_store=_vector_store,
+        subject=subject or None,
+        grade=grade or None,
+        metrics=metric_list,
+        name="frontend_upload",
+        ground_truths=ground_truths if any(ground_truths) else None,
     )
     return AskResponse(data=eval_result_to_dict(result))
 

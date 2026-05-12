@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -27,6 +28,21 @@ from utils.logger import logger
 logger = logging.getLogger(__name__)
 
 
+class _LangChainStyleEmbeddingsAdapter:
+    """将 RAGAS ``BaseRagasEmbedding``（``embed_text`` / ``embed_texts``）适配为
+    旧版 ``AnswerRelevancy`` 所用的 LangChain 风格 ``embed_query`` / ``embed_documents``。
+    """
+
+    def __init__(self, inner: Any):
+        self._inner = inner
+
+    def embed_query(self, text: str) -> list[float]:
+        return list(self._inner.embed_text(text))
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return [list(vec) for vec in self._inner.embed_texts(texts)]
+
+
 # ---------------------------------------------------------------------------
 # RAGAS 指标  —— 延迟导入，避免未安装时炸裂
 # ---------------------------------------------------------------------------
@@ -35,11 +51,15 @@ def _build_ragas_metrics(
     llm: Any,
     embeddings: Any | None = None,
 ) -> list:
-    """根据名称列表创建 RAGAS 0.4.x 指标实例"""
-    from ragas.metrics.collections.faithfulness import Faithfulness
-    from ragas.metrics.collections.answer_relevancy import AnswerRelevancy
-    from ragas.metrics.collections.context_precision import ContextPrecision
-    from ragas.metrics.collections.context_recall import ContextRecall
+    """根据名称列表创建 RAGAS 0.4.x 指标实例。
+
+    须使用 ``ragas.metrics._*`` 下的类：``ragas.evaluate`` 要求 ``isinstance(m, Metric)``，
+    而 ``ragas.metrics.collections.*`` 中的同名类基于 ``SimpleBaseMetric``，不会通过该检查。
+    """
+    from ragas.metrics._answer_relevance import AnswerRelevancy
+    from ragas.metrics._context_precision import ContextPrecision
+    from ragas.metrics._context_recall import ContextRecall
+    from ragas.metrics._faithfulness import Faithfulness
 
     registry = {
         "faithfulness": lambda: Faithfulness(llm=llm),
@@ -87,18 +107,28 @@ class RAGASEvaluator:
 
         if not settings.LLM_API_KEY:
             logger.warning("LLM_API_KEY 未配置，RAGAS 评估无法调用 LLM，结果不可靠")
-        return llm_factory(settings.LLM_MODEL, client=self._openai_client)
+
+        logger.info(
+            "RAGAS LLM Instructor max_tokens=%d（Faithfulness 等需足够大以防 JSON 截断）",
+            settings.RAGAS_LLM_MAX_TOKENS,
+        )
+        return llm_factory(
+            settings.LLM_MODEL,
+            client=self._openai_client,
+            max_tokens=settings.RAGAS_LLM_MAX_TOKENS,
+        )
 
     def _build_ragas_embeddings(self) -> Any:
         """用项目 Embedding 模型构建 RAGAS Embedding 包装"""
         from ragas.embeddings import HuggingFaceEmbeddings
 
         logger.info("正在加载 Embedding 模型: %s", settings.EMBEDDING_MODEL)
-        return HuggingFaceEmbeddings(
+        inner = HuggingFaceEmbeddings(
             model=settings.EMBEDDING_MODEL,
             device=settings.EMBEDDING_DEVICE,
             normalize_embeddings=True,
         )
+        return _LangChainStyleEmbeddingsAdapter(inner)
 
     # ------------------------------------------------------------------
     # 单样本评估
@@ -177,9 +207,10 @@ class RAGASEvaluator:
             len(dataset),
         )
 
-        # 3. 执行评估
+        # 3. 执行评估（RAGAS evaluate 内部调用了 asyncio.run()，需放到独立线程避免嵌套事件循环冲突）
         try:
-            result = ragas_evaluate(
+            result = await asyncio.to_thread(
+                ragas_evaluate,
                 dataset=dataset,
                 metrics=selected,
             )

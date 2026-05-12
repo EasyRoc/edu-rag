@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 from datetime import datetime
 
@@ -19,7 +20,7 @@ from config import settings
 from core.graph import build_rag_graph
 from core.vectorestore import K12VectorStore
 from evaluation.ragas_evaluator import RAGASEvaluator
-from evaluation.schemas import EvalResult, eval_result_to_dict
+from evaluation.schemas import EvalResult, eval_result_to_dict, sanitize_for_json_storage
 from models.db_models import EvaluationRecord, get_session_maker
 from services.rag_service import RAGService
 from utils.logger import logger
@@ -75,8 +76,11 @@ async def run_evaluation(
     }
 
     # 4. 持久化
+    record_id: str | None = None
     if save_to_db:
-        await _save_eval_result(result)
+        record_id = await _save_eval_result(result)
+        if record_id:
+            result.extra["record_id"] = record_id
 
     # 5. 打印报告
     _print_report(result)
@@ -135,7 +139,7 @@ async def run_live_evaluation(
     dataset = Dataset.from_dict(ds_dict)
 
     # 评估
-    return await run_evaluation(dataset, name=name, metrics=metrics, vector_store=vector_store)
+    return await run_evaluation(dataset, name=name, metrics=metrics)
 
 
 # ======================================================================
@@ -150,16 +154,18 @@ async def _save_eval_result(result: EvalResult) -> str | None:
             record = EvaluationRecord(
                 task_name=result.extra.get("name", "unnamed"),
                 metrics=result.metrics,
-                scores=result.scores,
+                scores=sanitize_for_json_storage(dict(result.scores)),
                 sample_count=result.sample_count,
-                samples=[
-                    {
-                        "question": s.question[:500],
-                        "answer": s.answer[:500],
-                        "scores": s.scores,
-                    }
-                    for s in result.samples
-                ],
+                samples=sanitize_for_json_storage(
+                    [
+                        {
+                            "question": s.question[:500],
+                            "answer": s.answer[:500],
+                            "scores": dict(s.scores),
+                        }
+                        for s in result.samples
+                    ]
+                ),
                 config_snapshot={
                     "llm_model": settings.LLM_MODEL,
                     "llm_base_url": settings.LLM_BASE_URL,
@@ -195,6 +201,9 @@ def _print_report(result: EvalResult) -> None:
     print(f"{sep}")
     print(f"  聚合得分:")
     for metric, score in sorted(result.scores.items()):
+        if isinstance(score, float) and math.isnan(score):
+            print(f"    {metric:<30s} {'N/A':>7s}  (指标计算失败或未产生有效分数)")
+            continue
         bar = "█" * int(score * 20) + "░" * (20 - int(score * 20))
         print(f"    {metric:<30s} {score:.4f}  {bar}")
     print(f"{sep}")

@@ -615,6 +615,51 @@
     min-width: 20px;
   }
 
+  /* ===== Evaluation Tab ===== */
+  .eval-layout { max-width: 900px; margin: 0 auto; }
+  .eval-panel { background: #fff; border-radius: var(--radius); box-shadow: var(--shadow); padding: 24px; }
+  .eval-dropzone {
+    border: 2px dashed var(--gray-300); border-radius: var(--radius);
+    padding: 32px; text-align: center; cursor: pointer; margin-bottom: 12px;
+    transition: border-color .2s, background .2s;
+  }
+  .eval-dropzone:hover, .eval-dropzone.dragover { border-color: var(--primary); background: var(--primary-light); }
+  .eval-dropzone .dropzone-icon { font-size: 36px; margin-bottom: 8px; }
+  .eval-dropzone .dropzone-text { color: var(--gray-500); font-size: 14px; }
+  #eval-content { width: 100%; height: 160px; font-family: monospace; font-size: 13px; padding: 12px; border: 1px solid var(--gray-200); border-radius: var(--radius); margin-bottom: 12px; resize: vertical; box-sizing: border-box; }
+  .eval-metrics-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 12px; }
+  .eval-check { display: flex; align-items: center; gap: 4px; font-size: 13px; cursor: pointer; }
+  .eval-scores-bar { display: flex; gap: 16px; flex-wrap: wrap; margin: 16px 0; }
+  .eval-score-card {
+    flex: 1; min-width: 140px; text-align: center; padding: 16px;
+    border-radius: var(--radius); background: var(--gray-50); border: 1px solid var(--gray-200);
+  }
+  .eval-score-card .score-val { font-size: 28px; font-weight: 700; color: var(--primary); }
+  .eval-score-card .score-label { font-size: 12px; color: var(--gray-500); margin-top: 4px; }
+  .eval-samples-list { margin-top: 16px; }
+  .eval-sample-item { padding: 12px; border-bottom: 1px solid var(--gray-100); }
+  .eval-sample-item:last-child { border-bottom: none; }
+  .eval-sample-q { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+  .eval-sample-scores { display: flex; gap: 8px; flex-wrap: wrap; font-size: 12px; }
+  .eval-sample-scores span { padding: 2px 8px; border-radius: 12px; background: var(--primary-light); color: var(--primary); }
+  .eval-sample-answer { font-size: 13px; color: var(--gray-600); margin-top: 6px; max-height: 60px; overflow: hidden; }
+  .eval-result-meta { font-size: 12px; color: var(--gray-500); margin: 0 0 12px; }
+  .eval-history-section { margin-top: 24px; }
+  .eval-history-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }
+  .eval-history-head h3 { margin: 0; font-size: 16px; }
+  .eval-history-table-wrap { overflow-x: auto; border: 1px solid var(--gray-200); border-radius: var(--radius); }
+  .eval-history-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .eval-history-table th {
+    text-align: left; padding: 10px 12px; background: var(--gray-50);
+    color: var(--gray-600); font-weight: 600; border-bottom: 1px solid var(--gray-200);
+  }
+  .eval-history-table td { padding: 10px 12px; border-bottom: 1px solid var(--gray-100); vertical-align: top; }
+  .eval-history-table tr:last-child td { border-bottom: none; }
+  .eval-history-table tr:hover td { background: var(--gray-50); }
+  .eval-history-scores { max-width: 320px; color: var(--gray-600); font-size: 12px; line-height: 1.4; }
+  .eval-history-actions { white-space: nowrap; }
+  .eval-history-empty { text-align: center; color: var(--gray-500); font-size: 14px; padding: 24px; background: var(--gray-50); border-radius: var(--radius); }
+
   /* Responsive */
   @media (max-width: 768px) {
     body { flex-direction: column; }
@@ -656,6 +701,9 @@
     </button>
     <button class="nav-item" data-tab="knowledge">
       <span class="nav-icon">🔖</span> 知识点
+    </button>
+    <button class="nav-item" data-tab="evaluation">
+      <span class="nav-icon">🧪</span> 效果评估
     </button>
   </nav>
   <div class="sidebar-footer">v1.0.0 · FastAPI + LangGraph</div>
@@ -906,6 +954,73 @@
       </div>
     </div>
   </div>
+
+  <!-- ========== 效果评估 ========== -->
+  <div class="tab-content" id="tab-evaluation">
+    <div class="eval-layout">
+      <div class="eval-panel">
+        <div class="panel-header">
+          <h2>🧪 RAGAS 效果评估</h2>
+          <p>上传测试集文件或粘贴 JSONL 内容，系统自动对每个问题进行 RAG 回答并用 RAGAS 指标打分</p>
+        </div>
+
+        <div class="eval-input-section">
+          <div id="eval-dropzone" class="eval-dropzone" onclick="document.getElementById('eval-file').click()">
+            <div class="dropzone-icon">📁</div>
+            <div class="dropzone-text">点击上传 或拖拽 JSON / JSONL 文件到此处</div>
+            <input type="file" id="eval-file" accept=".json,.jsonl" style="display:none" onchange="onEvalFilePicked(event)">
+          </div>
+          <textarea id="eval-content" placeholder="或者直接粘贴 JSONL 内容到此处...&#10;&#10;每行一个 JSON 对象：&#10;{&quot;question&quot;: &quot;...&quot;, &quot;ground_truth&quot;: &quot;...&quot;}"></textarea>
+
+          <div class="eval-metrics-row">
+            <label class="eval-check"><input type="checkbox" value="faithfulness" checked> Faithfulness</label>
+            <label class="eval-check"><input type="checkbox" value="answer_relevancy" checked> Answer Relevancy</label>
+            <label class="eval-check"><input type="checkbox" value="context_precision"> Context Precision</label>
+            <label class="eval-check"><input type="checkbox" value="context_recall"> Context Recall</label>
+            <button class="btn btn-primary" id="eval-run-btn" onclick="runEvaluation()">🚀 运行评估</button>
+          </div>
+        </div>
+
+        <div id="eval-status" style="display:none;">
+          <div class="loading-overlay">
+            <span class="spinner"></span>
+            <span id="eval-status-text">评估中，请稍候...</span>
+          </div>
+        </div>
+
+        <div id="eval-results" style="display:none;">
+          <div class="panel-header"><h3>评估结果</h3></div>
+          <p id="eval-result-meta" class="eval-result-meta" style="display:none;"></p>
+          <div class="eval-scores-bar" id="eval-scores-bar"></div>
+          <div class="eval-samples-list" id="eval-samples-list"></div>
+        </div>
+      </div>
+
+      <div class="eval-panel eval-history-section">
+        <div class="eval-history-head">
+          <h3>📋 历史评估记录</h3>
+          <button type="button" class="btn btn-outline btn-sm" id="eval-history-refresh" onclick="loadEvalHistory()">🔄 刷新</button>
+        </div>
+        <p class="eval-history-empty" id="eval-history-loading" style="display:none;">加载中…</p>
+        <p class="eval-history-empty" id="eval-history-empty">暂无记录。完成一次评估后会自动保存到此列表。</p>
+        <div class="eval-history-table-wrap" id="eval-history-wrap" style="display:none;">
+          <table class="eval-history-table">
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>任务</th>
+                <th>样本数</th>
+                <th>聚合得分</th>
+                <th>耗时</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="eval-history-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- Toast -->
@@ -921,6 +1036,9 @@ document.querySelectorAll('.nav-item').forEach(btn => {
     btn.classList.add('active');
     document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
     document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    if (btn.dataset.tab === 'evaluation') {
+      loadEvalHistory();
+    }
   });
 });
 
@@ -1427,6 +1545,217 @@ async function createKnowledgePoint() {
     showToast('创建失败: ' + err.message, 'error');
   } finally {
     loading.classList.remove('active');
+  }
+}
+
+// ==================== 效果评估 ====================
+function onEvalFilePicked(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    document.getElementById('eval-content').value = ev.target.result;
+  };
+  reader.readAsText(file);
+}
+
+// 拖拽支持
+(function() {
+  const dz = document.getElementById('eval-dropzone');
+  if (!dz) return;
+  dz.addEventListener('dragover', (e) => { e.preventDefault(); dz.classList.add('dragover'); });
+  dz.addEventListener('dragleave', () => dz.classList.remove('dragover'));
+  dz.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dz.classList.remove('dragover');
+    const file = e.dataTransfer.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (ev) => document.getElementById('eval-content').value = ev.target.result;
+      reader.readAsText(file);
+    }
+  });
+})();
+
+async function runEvaluation() {
+  const content = document.getElementById('eval-content').value.trim();
+  if (!content) { showToast('请先上传文件或粘贴测试集内容', 'info'); return; }
+
+  const checks = document.querySelectorAll('#tab-evaluation .eval-check input[type=checkbox]:checked');
+  const metrics = Array.from(checks).map(c => c.value).join(',');
+  if (!metrics) { showToast('请至少选择一个评估指标', 'info'); return; }
+
+  const btn = document.getElementById('eval-run-btn');
+  const statusEl = document.getElementById('eval-status');
+  const resultsEl = document.getElementById('eval-results');
+  const statusText = document.getElementById('eval-status-text');
+
+  btn.disabled = true; btn.textContent = '⏳ 评估中...';
+  statusEl.style.display = 'block';
+  statusText.textContent = '评估中，请稍候...';
+  resultsEl.style.display = 'none';
+
+  const formData = new FormData();
+  formData.append('content', content);
+  formData.append('metrics', metrics);
+
+  try {
+    const resp = await fetch(API_BASE + '/api/v1/evaluation/from-content', {
+      method: 'POST', body: formData,
+    });
+    const json = await resp.json();
+    if (json.code !== 0) { throw new Error(json.message || '评估失败'); }
+    renderEvalResults(json.data);
+    loadEvalHistory();
+  } catch (err) {
+    showToast('评估失败: ' + err.message, 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = '🚀 运行评估';
+    statusEl.style.display = 'none';
+  }
+}
+
+function formatEvalMetricDisplay(v) {
+  if (v === null || v === undefined || (typeof v === 'number' && Number.isNaN(v))) return 'N/A';
+  const n = Number(v);
+  if (Number.isNaN(n)) return 'N/A';
+  return Math.round(n * 100) + '%';
+}
+
+function briefEvalScoresSummary(scores) {
+  if (!scores || typeof scores !== 'object') return '—';
+  const pairs = Object.entries(scores).slice(0, 4);
+  if (!pairs.length) return '—';
+  return pairs.map(([k, v]) => k + ': ' + formatEvalMetricDisplay(v)).join(' · ');
+}
+
+function renderEvalResults(data, opts) {
+  opts = opts || {};
+  const resultsEl = document.getElementById('eval-results');
+  resultsEl.style.display = 'block';
+
+  const metaEl = document.getElementById('eval-result-meta');
+  if (metaEl) {
+    const parts = [];
+    if (data.record_id) parts.push('记录 ID: ' + data.record_id);
+    if (data.timestamp) parts.push(data.timestamp);
+    if (data.name) parts.push('任务: ' + data.name);
+    metaEl.textContent = parts.join(' · ');
+    metaEl.style.display = parts.length ? 'block' : 'none';
+  }
+
+  // 聚合分数卡片
+  const scores = data.scores || {};
+  let cardsHtml = '';
+  for (const [k, v] of Object.entries(scores)) {
+    const label = formatEvalMetricDisplay(v);
+    const isNA = label === 'N/A';
+    cardsHtml += `<div class="eval-score-card">
+      <div class="score-val">${isNA ? 'N/A' : label}</div>
+      <div class="score-label">${k}</div>
+    </div>`;
+  }
+  document.getElementById('eval-scores-bar').innerHTML = cardsHtml;
+
+  // 逐题详情
+  const samples = data.samples || [];
+  let listHtml = '';
+  samples.forEach((s, i) => {
+    const q = escapeHtml(s.question || '');
+    const a = escapeHtml((s.answer || '').substring(0, 200));
+    let scoreTags = '';
+    const ss = s.scores || {};
+    for (const [k, v] of Object.entries(ss)) {
+      scoreTags += `<span>${k}: ${formatEvalMetricDisplay(v)}</span>`;
+    }
+    listHtml += `<div class="eval-sample-item">
+      <div class="eval-sample-q">${i + 1}. ${q}</div>
+      <div class="eval-sample-scores">${scoreTags}</div>
+      <div class="eval-sample-answer">${a}</div>
+    </div>`;
+  });
+  document.getElementById('eval-samples-list').innerHTML = listHtml;
+
+  const sec = (data.elapsed_seconds != null) ? data.elapsed_seconds : '—';
+  if (!opts.skipToast) {
+    showToast(`评估完成: ${data.sample_count} 题, 耗时 ${sec}s`, 'success');
+  }
+  resultsEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+async function loadEvalHistory() {
+  const emptyEl = document.getElementById('eval-history-empty');
+  const loadingEl = document.getElementById('eval-history-loading');
+  const wrapEl = document.getElementById('eval-history-wrap');
+  const tbody = document.getElementById('eval-history-body');
+  if (!tbody) return;
+
+  loadingEl.style.display = 'block';
+  emptyEl.style.display = 'none';
+  wrapEl.style.display = 'none';
+  emptyEl.textContent = '暂无记录。完成一次评估后会自动保存到此列表。';
+
+  try {
+    const resp = await fetch(API_BASE + '/api/v1/evaluation/history?limit=50');
+    const json = await resp.json();
+    if (json.code !== 0) throw new Error(json.message || '加载失败');
+    const records = (json.data && json.data.records) || [];
+    tbody.innerHTML = '';
+
+    loadingEl.style.display = 'none';
+
+    if (!records.length) {
+      emptyEl.style.display = 'block';
+      return;
+    }
+
+    emptyEl.style.display = 'none';
+    wrapEl.style.display = 'block';
+
+    for (const r of records) {
+      const tr = document.createElement('tr');
+      const dt = r.created_at ? new Date(r.created_at).toLocaleString('zh-CN', { hour12: false }) : '—';
+      const elapsed = (r.elapsed_seconds != null && r.elapsed_seconds !== '') ? Number(r.elapsed_seconds).toFixed(1) + 's' : '—';
+      tr.innerHTML = `
+        <td>${escapeHtml(dt)}</td>
+        <td>${escapeHtml(r.task_name || '')}</td>
+        <td>${r.sample_count != null ? r.sample_count : '—'}</td>
+        <td class="eval-history-scores">${escapeHtml(briefEvalScoresSummary(r.scores))}</td>
+        <td>${escapeHtml(elapsed)}</td>
+        <td class="eval-history-actions"><button type="button" class="btn btn-sm btn-outline" data-eval-id="${escapeHtml(r.id)}">查看</button></td>
+      `;
+      const btn = tr.querySelector('button[data-eval-id]');
+      btn.addEventListener('click', () => openEvalHistoryDetail(r.id));
+      tbody.appendChild(tr);
+    }
+  } catch (err) {
+    loadingEl.style.display = 'none';
+    emptyEl.style.display = 'block';
+    emptyEl.textContent = '加载失败：' + err.message;
+    showToast('历史记录加载失败: ' + err.message, 'error');
+  }
+}
+
+async function openEvalHistoryDetail(recordId) {
+  if (!recordId) return;
+  try {
+    const resp = await fetch(API_BASE + '/api/v1/evaluation/history/' + encodeURIComponent(recordId));
+    const json = await resp.json();
+    if (json.code !== 0) throw new Error(json.message || '加载详情失败');
+    const d = json.data || {};
+    renderEvalResults({
+      metrics: d.metrics,
+      scores: d.scores,
+      sample_count: d.sample_count,
+      samples: d.samples || [],
+      elapsed_seconds: d.elapsed_seconds,
+      record_id: d.id,
+      timestamp: d.created_at,
+      name: d.task_name,
+    }, { skipToast: true });
+    showToast('已加载历史记录详情', 'info');
+  } catch (err) {
+    showToast('打开详情失败: ' + err.message, 'error');
   }
 }
 
