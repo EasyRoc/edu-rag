@@ -50,6 +50,14 @@ class Settings:
     # 稠密检索（Milvus COSINE）：返回值为余弦相似度，越大越相似；低于此值的结果丢弃。0 表示不按阈值过滤。
     DENSE_MIN_SIMILARITY: float = float(os.getenv("DENSE_MIN_SIMILARITY", "0.0"))
 
+    # ---------- 多策略检索 ----------
+    MULTI_QUERY_VARIANTS: int = int(os.getenv("MULTI_QUERY_VARIANTS", "4"))       # 多查询生成的变体数量
+    DECOMPOSITION_MAX_SUB: int = int(os.getenv("DECOMPOSITION_MAX_SUB", "4"))     # 复杂问题最多拆解的子问题数
+    RETRIEVAL_QUALITY_THRESHOLD: float = float(os.getenv("RETRIEVAL_QUALITY_THRESHOLD", "0.5"))  # 检索质量最低置信度
+    HYDE_MIN_SCORE: float = float(os.getenv("HYDE_MIN_SCORE", "0.4"))             # 触发 HyDE 的最低分
+    STEP_BACK_MIN_DOCS: int = int(os.getenv("STEP_BACK_MIN_DOCS", "3"))           # 触发 Step-Back 的最少结果数
+    STRATEGY_TIMEOUT: float = float(os.getenv("STRATEGY_TIMEOUT", "10"))           # 策略 LLM 调用超时(秒)
+
     # ---------- 纠正重试 ----------
     MAX_RETRIES: int = 2           # Corrective RAG 最大重试次数
 

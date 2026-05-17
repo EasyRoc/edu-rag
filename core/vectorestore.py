@@ -108,6 +108,9 @@ class K12VectorStore:
                 "chapter": chunk.get("chapter", ""),
                 "knowledge_point": chunk.get("knowledge_point", ""),
                 "chunk_type": chunk.get("chunk_type", "text"),
+                "page": chunk.get("page", 0),
+                "source_file": chunk.get("source_file", ""),
+                "file_type": chunk.get("file_type", ""),
             })
         ids = self.milvus_client.insert(collection_name=collection_name,
                                         data=milvus_data, )
@@ -128,7 +131,7 @@ class K12VectorStore:
             result = self.milvus_client.query(
                 collection_name=collection_name,
                 filter="",
-                output_fields=["id", "chunk_text", "subject", "grade", "chapter", "knowledge_point"],
+                output_fields=["id", "chunk_text", "doc_id", "subject", "grade", "chapter", "knowledge_point", "source_file", "file_type", "page"],
                 limit=10000,
             )
         except Exception as e:
@@ -217,7 +220,7 @@ class K12VectorStore:
             data=[query_vec],
             filter=filter_str or None,
             limit=top_k,
-            output_fields=["chunk_text", "doc_id", "subject", "grade", "chapter", "knowledge_point"],
+            output_fields=["chunk_text", "doc_id", "subject", "grade", "chapter", "knowledge_point", "source_file", "file_type", "page"],
             search_params={"metric_type": "COSINE", "params": {"ef": 10}},
         )
         if not results or not results[0]:
@@ -235,6 +238,9 @@ class K12VectorStore:
                 "grade": hit["entity"].get("grade", ""),
                 "chapter": hit["entity"].get("chapter", ""),
                 "knowledge_point": hit["entity"].get("knowledge_point", ""),
+                "source_file": hit["entity"].get("source_file", ""),
+                "file_type": hit["entity"].get("file_type", ""),
+                "page": hit["entity"].get("page", 0),
                 "_source": "dense",
             })
         min_sim = settings.DENSE_MIN_SIMILARITY
@@ -277,6 +283,9 @@ class K12VectorStore:
                 "grade": doc.get("grade", ""),
                 "chapter": doc.get("chapter", ""),
                 "knowledge_point": doc.get("knowledge_point", ""),
+                "source_file": doc.get("source_file", ""),
+                "file_type": doc.get("file_type", ""),
+                "page": doc.get("page", 0),
                 "_source": "sparse",
             })
 

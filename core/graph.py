@@ -56,13 +56,14 @@ async def classify_node(state: RAGState) -> dict:
 
 
 async def retrieve_node(state: RAGState) -> dict:
-    """混合检索节点"""
+    """混合检索节点（策略驱动）"""
     logger.info(f"[节点] retrieve: complexity={state['complexity']}")
     vector_store: K12VectorStore = state.get("_vector_store")
-    docs = hybrid_retrieve(
+    docs = await hybrid_retrieve(
         vector_store=vector_store,
         query=state["query"],
         complexity=state["complexity"],
+        intent=state.get("intent", "educational"),
         subject=state.get("subject"),
         grade=state.get("grade"),
     )
@@ -106,16 +107,14 @@ async def evaluate_node(state: RAGState) -> dict:
 
 
 async def re_retrieve_node(state: RAGState) -> dict:
-    """重新检索节点（纠正时触发，增加检索深度）"""
+    """重新检索节点（纠正时触发，直接扩大检索深度，不触发额外策略）"""
     logger.info(f"[节点] re_retrieve: 第 {state.get('retry_count', 0) + 1} 次重试")
     vector_store: K12VectorStore = state.get("_vector_store")
-    # 增加 top_k 获取更多结果
-    docs = hybrid_retrieve(
-        vector_store=vector_store,
+    docs = vector_store.hybrid_search(
         query=state["query"],
-        complexity="complex",  # 重试时使用 complex 深度
         subject=state.get("subject"),
         grade=state.get("grade"),
+        top_k=8,  # 重试时扩大检索
     )
     return {
         "retrieved_docs": docs,

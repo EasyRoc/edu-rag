@@ -77,13 +77,18 @@ class RAGService:
         references = []
         for doc in final_state.get("retrieved_docs", []):
             references.append({
+                "index": len(references) + 1,
                 "chunk_id": doc.get("id"),
                 "text": doc.get("text", "")[:200],
-                "source": doc.get("doc_id", ""),
+                "source_file": doc.get("source_file") or doc.get("doc_id") or "未知来源",
+                "page": doc.get("page", 0),
+                "chapter": doc.get("chapter", ""),
                 "score": round(doc.get("score", 0), 4),
                 "subject": doc.get("subject", ""),
                 "grade": doc.get("grade", ""),
             })
+            # 保留 source 字段向后兼容
+            references[-1]["source"] = doc.get("doc_id", "")
 
         answer = final_state.get("answer", "抱歉，暂时无法回答该问题。")
 
@@ -215,13 +220,18 @@ class RAGService:
             references = []
             for doc in final_state.get("retrieved_docs", []):
                 references.append({
+                    "index": len(references) + 1,
                     "chunk_id": doc.get("id"),
                     "text": doc.get("text", "")[:200],
-                    "source": doc.get("doc_id", ""),
+                    "source_file": doc.get("source_file") or doc.get("doc_id") or "未知来源",
+                    "page": doc.get("page", 0),
+                    "chapter": doc.get("chapter", ""),
                     "score": round(doc.get("score", 0), 4),
                     "subject": doc.get("subject", ""),
                     "grade": doc.get("grade", ""),
                 })
+                # 保留 source 字段向后兼容
+                references[-1]["source"] = doc.get("doc_id", "")
             final_complexity = final_state.get("complexity", "medium")
 
         elapsed = int((time.time() - start_time) * 1000)

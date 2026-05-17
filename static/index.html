@@ -438,6 +438,36 @@
     -webkit-box-orient: vertical;
     overflow: hidden;
   }
+  /* Reference toggle in message meta */
+  .ref-toggle {
+    cursor: pointer;
+    color: var(--primary);
+    text-decoration: none;
+    user-select: none;
+  }
+  .ref-toggle:hover { text-decoration: underline; color: #0958d9; }
+  /* Enhanced reference items */
+  .ref-item {
+    display: flex; gap: 10px; padding: 10px 0;
+    border-bottom: 1px solid var(--gray-100);
+  }
+  .ref-item:last-child { border-bottom: none; }
+  .ref-item .ref-index {
+    font-weight: 700; color: var(--primary); font-size: 13px;
+    min-width: 24px; flex-shrink: 0;
+  }
+  .ref-item .ref-body { flex: 1; min-width: 0; }
+  .ref-item .ref-source {
+    font-weight: 600; font-size: 13px; color: var(--gray-800);
+    word-break: break-all;
+  }
+  .ref-item .ref-chapter { font-size: 12px; color: var(--gray-500); margin-top: 2px; }
+  .ref-item .ref-meta { font-size: 11px; color: var(--gray-400); margin-top: 3px; }
+  .ref-item .ref-text {
+    font-size: 12px; color: var(--gray-500); margin-top: 4px;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    overflow: hidden; line-height: 1.5;
+  }
 
   /* Answer card */
   .answer-area { margin-top: 20px; }
@@ -1178,7 +1208,7 @@ function renderMessages() {
         metaHtml = `<div class="message-meta">
           ${msg.latency_ms ? `<span>⏱ ${msg.latency_ms}ms</span>` : ''}
           ${compLabel ? `<span>📊 ${compLabel}</span>` : ''}
-          ${hasRefs ? `<span>📄 ${msg.references.length} 篇参考</span>` : ''}
+          ${hasRefs ? `<span class="ref-toggle" onclick="showRefs(${idx})">📄 ${msg.references.length} 篇参考 ▸</span>` : ''}
           ${msg.record_id ? `<span class="feedback-btns">
             <button onclick="sendFeedbackChat(${idx}, 1)">👍</button>
             <button onclick="sendFeedbackChat(${idx}, -1)">👎</button>
@@ -1282,6 +1312,42 @@ async function sendMessage() {
     grade: document.getElementById('qa-grade').value || null,
     user_id: SESSION_USER_ID,
   }));
+}
+
+function showRefs(msgIdx) {
+  const msg = chatMessages[msgIdx];
+  if (!msg || !msg.references || !msg.references.length) return;
+
+  const panel = document.getElementById('refs-panel');
+  const list = document.getElementById('refs-list');
+  const count = document.getElementById('refs-count');
+
+  count.textContent = `📚 参考来源 (${msg.references.length})`;
+
+  list.innerHTML = msg.references.map(ref => {
+    const idx = ref.index || '';
+    const src = escapeHtml(ref.source_file || '未知来源');
+    const chapter = ref.chapter ? `<div class="ref-chapter">📖 ${escapeHtml(ref.chapter)}</div>` : '';
+    const page = ref.page ? ` · 第${ref.page}页` : '';
+    const subject = ref.subject ? escapeHtml(ref.subject) : '';
+    const grade = ref.grade ? escapeHtml(ref.grade) : '';
+    const metaParts = [subject, grade].filter(Boolean).join(' · ');
+    const pct = ref.score != null ? Math.round(ref.score * 100) : 0;
+    const metaLine = [`匹配度: ${pct}%`, page, metaParts].filter(Boolean).join(' · ');
+    const text = escapeHtml((ref.text || '').substring(0, 200));
+
+    return `<div class="ref-item">
+      <div class="ref-index">[${idx}]</div>
+      <div class="ref-body">
+        <div class="ref-source">📁 ${src}</div>
+        ${chapter}
+        <div class="ref-meta">${metaLine}</div>
+        <div class="ref-text">${text}</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  panel.classList.add('open');
 }
 
 function toggleRefs() {
