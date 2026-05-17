@@ -72,3 +72,27 @@ class AnalyticsResponse(BaseModel):
     """学情分析响应"""
     code: int = 0
     data: dict | None = None
+
+
+# ==================== SQL 数据导入 ====================
+
+class SQLImportRequest(BaseModel):
+    """SQL 数据导入请求：提供数据库连接信息，由后端连接数据库流式读取"""
+    db_url: str = Field(..., description="数据库连接串，如 mysql+pymysql://user:pass@host:3306/db")
+    table_name: str = Field(..., description="源表名")
+    subject: str = Field(..., description="学科")
+    grade: str = Field("", description="年级")
+    chapter: str = Field("", description="章节")
+    field_map: dict[str, str] | None = Field(None, description="字段中文映射，如 {'name': '商品', 'price': '价格'}")
+    id_column: str = Field("id", description="主键列名，用于游标分页")
+    columns: list[str] | None = Field(None, description="需要查询的列，不传默认 SELECT *")
+    where_clause: str = Field("", description="附加 WHERE 条件，如 status='active'")
+    batch_size: int = Field(1000, description="每批读取行数")
+    strategy: str = Field("recursive", description="切片策略 (recursive/semantic/markdown)")
+
+
+class SQLImportResponse(BaseModel):
+    """SQL 导入响应"""
+    code: int = 0
+    message: str = "success"
+    data: dict | None = None

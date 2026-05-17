@@ -1,4 +1,4 @@
-"""文档管理服务：上传、列表、删除文档"""
+"""文档管理服务：上传、列表、删除文档，支持文件(PDF/MD/TXT)和SQL数据导入"""
 
 import os
 import uuid
@@ -69,6 +69,91 @@ class DocumentService:
             strategy=strategy,
         )
         # 4. 更新文档状态
+        async with session_maker() as session:
+            doc = await session.get(Document, doc_id)
+            if doc:
+                if result["status"] == "success":
+                    doc.status = "completed"
+                    doc.chunk_count = result.get("chunk_count", 0)
+                else:
+                    doc.status = "failed"
+                    doc.error_message = result.get("message", "未知错误")
+                await session.commit()
+
+        result["doc_id"] = doc_id
+        return result
+
+    async def import_from_sql(
+            self,
+            db_url: str,
+            table_name: str,
+            subject: str = "",
+            grade: str = "",
+            chapter: str = "",
+            field_map: dict[str, str] | None = None,
+            id_column: str = "id",
+            columns: list[str] | None = None,
+            where_clause: str = "",
+            batch_size: int = 1000,
+            strategy: str = "recursive",
+    ) -> dict:
+        """
+        连接数据库 → 流式读取 → 清洗 → 切片 → 入库。
+
+        参数:
+            db_url: 数据库连接串，如 mysql+pymysql://user:pass@host:3306/db
+            table_name: 源表名
+            subject: 学科
+            grade: 年级
+            chapter: 章节
+            field_map: 字段中文映射 {字段名: 中文标签}
+            id_column: 主键列名，用于游标分页
+            columns: 需要查询的列
+            where_clause: 附加 WHERE 条件
+            batch_size: 每批读取行数
+            strategy: 切片策略
+        """
+        from ingestion.cleaner import SQLSourceAdapter
+
+        logger.info(f"SQL 导入: db={db_url}, table={table_name}, subject={subject}")
+
+        # 1. 创建文档记录
+        doc_id = str(uuid.uuid4())
+        session_maker = get_session_maker()
+        async with session_maker() as session:
+            doc_record = Document(
+                id=doc_id,
+                title=f"[SQL] {table_name}",
+                doc_type="mysql",
+                subject=subject,
+                grade=grade,
+                chapter=chapter,
+                file_path=f"mysql://{table_name}",
+                status="processing",
+            )
+            session.add(doc_record)
+            await session.commit()
+            logger.info(f"SQL 文档记录已创建: {doc_id}")
+
+        # 2. 创建 adapter 并执行 pipeline（stream_rows 内部管理连接生命周期）
+        adapter = SQLSourceAdapter(
+            db_url=db_url,
+            table_name=table_name,
+            field_map=field_map,
+            id_column=id_column,
+            columns=columns,
+            where_clause=where_clause,
+            batch_size=batch_size,
+        )
+        result = self.pipeline.process_sql(
+            adapter=adapter,
+            subject=subject,
+            grade=grade,
+            chapter=chapter,
+            strategy=strategy,
+        )
+
+        # 3. 更新文档状态
         async with session_maker() as session:
             doc = await session.get(Document, doc_id)
             if doc:
