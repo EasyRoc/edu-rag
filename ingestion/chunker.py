@@ -66,6 +66,9 @@ def split_documents(
             "knowledge_point": chunk.metadata.get("knowledge_point", ""),
             "chunk_type": chunk.metadata.get("chunk_type", "text"),
             "chunk_index": i,
+            "page": chunk.metadata.get("page", 0),
+            "source_file": chunk.metadata.get("source_file", ""),
+            "file_type": chunk.metadata.get("file_type", ""),
         })
 
     logger.info(f"切片完成，共 {len(result)} 个切片")
