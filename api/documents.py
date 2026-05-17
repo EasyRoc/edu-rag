@@ -1,7 +1,12 @@
-"""文档管理接口：上传、列表、删除文档"""
+"""文档管理接口：上传、列表、删除文档，支持文件(PDF/MD/TXT)和SQL数据导入"""
 
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
-from models.schemas import DocumentUploadResponse, DocumentListResponse
+from models.schemas import (
+    DocumentUploadResponse,
+    DocumentListResponse,
+    SQLImportRequest,
+    SQLImportResponse,
+)
 from services.document_service import DocumentService
 from utils.logger import logger
 
@@ -23,7 +28,7 @@ async def upload_document(
     chapter: str = Form("", description="章节"),
     strategy: str = Form("recursive", description="切片策略"),
 ):
-    """上传文档并自动处理入库"""
+    """上传文档并自动处理入库（PDF/MD/TXT）"""
     if document_service is None:
         raise HTTPException(status_code=503, detail="文档服务未初始化")
 
@@ -50,6 +55,40 @@ async def upload_document(
     except Exception as e:
         logger.error(f"文档上传处理失败: {e}")
         return DocumentUploadResponse(code=500, message=f"处理失败: {str(e)}")
+
+
+@router.post("/import/sql", response_model=SQLImportResponse)
+async def import_sql(req: SQLImportRequest):
+    """从 SQL 数据库导入：后端连接数据库 → 流式读取 → 清洗 → 切片 → 入库"""
+    if document_service is None:
+        raise HTTPException(status_code=503, detail="文档服务未初始化")
+
+    if not req.db_url:
+        raise HTTPException(status_code=400, detail="db_url 不能为空")
+
+    if not req.table_name:
+        raise HTTPException(status_code=400, detail="table_name 不能为空")
+
+    logger.info(f"SQL 导入: table={req.table_name}, subject={req.subject}, db={req.db_url.split('@')[-1] if '@' in req.db_url else req.db_url}")
+
+    try:
+        result = await document_service.import_from_sql(
+            db_url=req.db_url,
+            table_name=req.table_name,
+            subject=req.subject,
+            grade=req.grade,
+            chapter=req.chapter,
+            field_map=req.field_map,
+            id_column=req.id_column,
+            columns=req.columns,
+            where_clause=req.where_clause,
+            batch_size=req.batch_size,
+            strategy=req.strategy,
+        )
+        return SQLImportResponse(data=result)
+    except Exception as e:
+        logger.error(f"SQL 导入失败: {e}")
+        return SQLImportResponse(code=500, message=f"导入失败: {str(e)}")
 
 
 @router.get("/list", response_model=DocumentListResponse)
