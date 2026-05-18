@@ -17,6 +17,10 @@
 - [配置参考](#配置参考)
 - [仓库结构](#仓库结构)
 - [检索与流水线说明](#检索与流水线说明)
+  - [问答主链路](#问答主链路)
+  - [数据清洗流水线](#数据清洗流水线)
+  - [SQL 数据导入](#sql-数据导入)
+  - [RRF 融合公式](#rrf-融合公式)
 - [安全与合规](#安全与合规)
 - [已知限制与排查](#已知限制与排查)
 
@@ -33,12 +37,15 @@
 | 特性 | 说明 |
 |------|------|
 | **混合检索** | 稠密向量（语义）+ BM25（关键词），RRF 融合 |
-| **意图与复杂度** | 教育 / 闲聊分流；教学问句再分 simple / medium / complex 调节检索深度 |
+| **多策略检索** | 根据意图+复杂度自动选择检索策略：直接检索 / 多查询变体 / 问题分解 + HyDE / Step-Back 补充 |
+| **意图与复杂度** | 教育 / 闲聊分流；教学问句再分 simple / medium / complex 调节检索深度；LLM 分类结果自动收集为 BERT 微调数据 |
 | **Corrective RAG** | 生成后质量评估，不通过则扩检索并重试（可配置上限） |
-| **LangGraph 编排** | 分类 → 检索 → 生成 → 评估 → （重试）流程图式定义 |
+| **数据清洗** | 文件导入时自动执行规范化→去噪→结构修复→校验四阶段流水线；支持去重、质量评分 |
+| **LangGraph 编排** | 分类 → 检索（含策略选择）→ 生成 → 评估 → （重试）流程图式定义 |
 | **Milvus Lite** | 本地单文件向量库（`pymilvus` + lite），免去单独部署向量服务 |
 | **RAGAS 评估** | Faithfulness、Answer Relevancy 等指标；评估结果写入业务库并在控制台展示历史 |
 | **Web 控制台** | `static/index.html`：问答、文档导入、学情、知识点维护、评估任务 |
+| **SQL 数据导入** | 支持从 MySQL 等数据库直接导入表数据，经清洗→切片→向量化入库 |
 
 ### 应用场景与边界
 
@@ -85,9 +92,11 @@ graph TB
     subgraph ENGINE["LangGraph RAG"]
         LANGGRAPH["工作流编排"]
         INTENT["意图 + 复杂度"]
+        STRATEGY["策略选择"]
         HYBRID["混合检索 RRF"]
         LLM_GEN["LLM 生成"]
         CORR["Corrective 评估"]
+        SUPP["补充策略<br/>HyDE / Step-Back"]
     end
 
     subgraph DATA["数据层"]
@@ -99,6 +108,7 @@ graph TB
 
     subgraph FILES["本地文件"]
         UP["uploaded_docs/"]
+        CLEANER["Cleaner 清洗器"]
     end
 
     Web --> RAG_API
@@ -115,13 +125,16 @@ graph TB
 
     RAG_SVC --> LANGGRAPH
     DOC_SVC --> INGEST
-    LANGGRAPH --> INTENT --> HYBRID --> LLM_GEN --> CORR
+    INGEST --> CLEANER["数据清洗"]
+    LANGGRAPH --> INTENT --> STRATEGY --> HYBRID --> LLM_GEN --> CORR
     HYBRID --> MILVUS
     HYBRID --> BM25
     HYBRID --> EMBED
+    CORR -.-> SUPP
+    SUPP -.-> HYBRID
     INGEST --> UP
-    INGEST --> MILVUS
-    INGEST --> BM25
+    CLEANER --> MILVUS
+    CLEANER --> BM25
 
     RAG_SVC --> SQLITE
     DOC_SVC --> SQLITE
@@ -134,7 +147,7 @@ graph TB
 
 ### 文档入库（概要）
 
-在 **系统架构** 图中，导入流水线由文档服务触发；数据流为：上传 PDF / Markdown / TXT → 解析与切片 → Embedding → Milvus 写入并同步稀疏索引（BM25）→ SQLite 更新文档状态。HTTP 入口：`POST /api/v1/documents/upload`。
+在 **系统架构** 图中，导入流水线由文档服务触发；数据流为：上传 PDF / Markdown / TXT / SQL → 解析 → **数据清洗（四阶段）** → 切片 → Embedding → Milvus 写入并同步稀疏索引（BM25）→ SQLite 更新文档状态。HTTP 入口：`POST /api/v1/documents/upload` 及 `POST /api/v1/documents/import/sql`。
 
 ---
 
@@ -150,8 +163,11 @@ graph TB
 | LLM | OpenAI SDK 兼容端点 | 默认百炼 Compatible Mode，`LLM_BASE_URL` + `LLM_MODEL` |
 | 文档 | unstructured、pypdf | PDF / MD / TXT |
 | 稀疏检索 | rank_bm25 | 与稠密向量互补 |
+| 多策略检索 | LLM 驱动查询改写/分解 | Multi-Query、Decomposition、HyDE、Step-Back |
+| 数据清洗 | 自定义四阶段流水线 | 规范化→去噪→修复→校验；多数据源适配 |
 | 业务库 | SQLite + SQLAlchemy async | `k12_business.db` |
 | 离线评估 | RAGAS + datasets | Instructor 结构化输出，`RAGAS_LLM_MAX_TOKENS` 可调 |
+| 数据库导入 | SQLAlchemy + PyMySQL | 支持 MySQL 等关系型数据库流式导入 |
 
 ### 核心第三方组件
 
@@ -159,7 +175,8 @@ graph TB
 - **LangChain**：部分抽象与惯例；向量存储本项目以 **`K12VectorStore`**（`core/vectorestore.py`）为主。  
 - **sentence-transformers**：加载 Embedding 编码器（如 BGE 系列）。  
 - **rank_bm25**：稀疏检索打分。  
-- **RAGAS / Hugging Face datasets**：离线评估流水线与数据集表示。
+- **RAGAS / Hugging Face datasets**：离线评估流水线与数据集表示。  
+- **SQLAlchemy / PyMySQL**：关系数据库连接与流式读取（SQL 数据导入）。
 
 ### 声明式依赖版本
 
@@ -173,7 +190,7 @@ graph TB
 | 向量化 | `sentence-transformers>=3.0.0` | Embedding 推理 |
 | 文档 | `unstructured[pdf,md]`、`pypdf` | 解析与切分流水线 |
 | 评估 | `ragas>=0.2.0`、`datasets>=3.0.0` | RAGAS 与数据集 |
-| 持久化 | `sqlalchemy>=2.0.0`、`aiosqlite`、`greenlet` | 异步 SQLite |
+| 持久化 | `sqlalchemy>=2.0.0`、`aiosqlite`、`greenlet`、`pymysql` | 异步 SQLite + MySQL 连接 |
 | 其它 | `rank_bm25`、`httpx`、`python-dotenv`、`python-multipart` | BM25、HTTP 客户端、环境与上传 |
 
 ---
@@ -248,7 +265,7 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 | 模块 | 功能 |
 |------|------|
 | RAG 问答 | 多学科/年级筛选、引用来源面板 |
-| 文档管理 | 上传、列表、删除、切片策略 |
+| 文档管理 | 上传（PDF/MD/TXT）、SQL 导入、列表、删除、切片策略 |
 | 学情分析 | 与用户 ID 关联的统计分析（依赖历史数据） |
 | 知识点 | 维护知识点树 |
 | 效果评估 | JSON/JSONL 测试集上传 → RAG 生成答案 → RAGAS 打分；结果持久化并可查看历史记录 |
@@ -263,7 +280,8 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 | GET | `/health` | 健康检查 |
 | POST | `/api/v1/rag/ask` | 问答 |
 | POST | `/api/v1/rag/feedback` | 对某条 QA 点赞/差评 |
-| POST | `/api/v1/documents/upload` | 上传文档并入库 |
+| POST | `/api/v1/documents/upload` | 上传文档并入库（PDF/MD/TXT） |
+| POST | `/api/v1/documents/import/sql` | 从 MySQL 等数据库导入数据 |
 | GET | `/api/v1/documents/list` | 文档列表 |
 | DELETE | `/api/v1/documents/{id}` | 删除文档 |
 | GET | `/api/v1/knowledge-points/tree` | 知识点树 |
@@ -294,6 +312,7 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 | `k12_business.db`（默认） | SQLite：文档元数据、问答记录、知识点、`evaluation_records` 等业务表 |
 | `K12_MILVUS_URI` 指向的文件 | Milvus Lite 向量与索引数据 |
 | `uploaded_docs/` | 用户上传文档的落盘副本（文件名通常带 UUID 前缀） |
+| `data/intent_training_data.jsonl` | LLM 意图分类结果自动收集，用于 BERT 微调 |
 | HuggingFace 缓存目录 | Embedding 权重缓存在本机用户目录下（取决于 `sentence-transformers` / `HF_HOME` 等环境） |
 | 日志 | `k12_rag` 等 logger，默认级别见 `LOG_LEVEL` |
 
@@ -306,6 +325,8 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 | [`sample_docs/`](sample_docs/) | 语文/数学等小样本教材片段，可配合「文档上传」走通入库与问答 |
 | [`evaluation/sample_test.json`](evaluation/sample_test.json) | 含 `question` / `contexts` / `ground_truth` 的 JSON 示例，适合理解 RAGAS 输入形态 |
 | [`data/test_sets/manual_v1.jsonl`](data/test_sets/manual_v1.jsonl) | 手工编写的多科问答测试集，见下节说明 |
+| [`spec/`](spec/) | 功能设计文档：多策略检索、数据清洗、引用优化 |
+| [`test/`](test/) | 测试代码：多策略检索测试、数据清洗测试 |
 
 ### manual_v1.jsonl
 
@@ -347,6 +368,11 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 | `MAX_RETRIES` | 2 | Corrective RAG 最大重试轮次 |
 | `CONFIDENCE_THRESHOLD` / `BERT_MAX_LENGTH` | 0.7 / 128 | 意图链路中本地分类器阈值与序列长度 |
 | `LLM_TIMEOUT_SECONDS` / `ENABLE_LLM_FALLBACK` | 3 / True | LLM 参与意图兜底时的超时与开关 |
+| `MULTI_QUERY_VARIANTS` | 4 | 多查询策略生成的变体数量 |
+| `DECOMPOSITION_MAX_SUB` | 4 | 复杂问题拆解的最多子问题数 |
+| `RETRIEVAL_QUALITY_THRESHOLD` | 0.5 | 检索质量最低置信度，低于时触发补充策略 |
+| `HYDE_MIN_SCORE` / `STEP_BACK_MIN_DOCS` | 0.4 / 3 | 触发 HyDE / Step-Back 补充策略的阈值 |
+| `STRATEGY_TIMEOUT` | 10 | 策略 LLM 调用超时（秒） |
 
 ---
 
@@ -359,29 +385,53 @@ edu-rag/
 ├── requirements.txt
 ├── .env.example
 ├── sample_docs/                # 入门用小型教材样例（TXT/MD）
-├── data/                       # 可选：测试集、意图训练样本等（按需使用）
+├── data/
+│   ├── intent_training_data.jsonl  # 意图分类微调数据（自动收集）
+│   └── test_sets/
+│       └── manual_v1.jsonl     # 手工问答测试集
+├── spec/                       # 功能设计文档
+│   ├── multi_strategy_retrieval.md
+│   ├── document_clean.md
+│   └── source_citation_optimization.md
+├── test/                       # 测试代码
+│   ├── test_strategies.py      # 多策略检索测试
+│   ├── test_cleaner.py         # 数据清洗测试
+│   ├── multi_strategy_retrieval_test.md
+│   └── data_cleaning_test.md
 ├── static/
 │   └── index.html              # Web 控制台
 ├── core/
 │   ├── embeddings.py
 │   ├── vectorestore.py         # Milvus + BM25 + RRF
 │   ├── graph.py                # LangGraph 编排
-│   └── nodes/
-│       ├── query_classifier.py # 复杂度 + 异步意图分流
-│       ├── bert_classifier.py / llm_classifier.py / keyword_matcher.py …
-│       ├── chitchat.py
-│       ├── retriever.py
-│       ├── generator.py
-│       └── evaluator.py        # Corrective RAG 规则评估
+│   ├── stream_queue.py         # 流式输出队列
+│   ├── nodes/
+│   │   ├── query_classifier.py # 复杂度 + 异步意图分流
+│   │   ├── bert_classifier.py / llm_classifier.py / keyword_matcher.py …
+│   │   ├── chitchat.py
+│   │   ├── retriever.py        # 策略驱动的混合检索
+│   │   ├── generator.py
+│   │   ├── evaluator.py        # Corrective RAG 规则评估
+│   │   └── training_collector.py # BERT 微调数据自动收集
+│   └── strategies/             # 多策略检索模块
+│       ├── selector.py         # 策略选择器 + 质量评估
+│       ├── multi_query.py      # 多查询变体生成 + RRF 融合
+│       ├── decomposition.py    # 复杂问题拆解 + 子结果合并
+│       ├── hyde.py             # HyDE 假设答案生成
+│       ├── step_back.py        # Step-Back 抽象回退
+│       └── _llm.py             # 策略共享 LLM 调用工具
 ├── ingestion/
-│   ├── loader.py / chunker.py / pipeline.py
+│   ├── loader.py               # PDF/MD/TXT 文档加载
+│   ├── cleaner.py              # 数据清洗模块（四阶段 + 多数据源适配）
+│   ├── chunker.py
+│   └── pipeline.py             # 导入流水线（含文件/SQL 双入口）
 ├── evaluation/
 │   ├── ragas_evaluator.py      # LLM / Embedding / 指标适配
 │   ├── pipeline.py             # run_evaluation / run_live_evaluation / 入库
 │   ├── dataset_builder.py
 │   ├── schemas.py
 │   ├── testset_generator.py
-│   ├── sample_test.json       # 离线评估示例数据
+│   ├── sample_test.json        # 离线评估示例数据
 │   └── cli.py
 ├── api/
 │   ├── rag.py / documents.py / knowledge.py / analytics.py / evaluation.py
@@ -396,10 +446,52 @@ edu-rag/
 
 ### 问答主链路
 
-1. **意图与复杂度**：非教育类查询进入闲聊分支；教育类查询通过规则或模型划分为 `simple` / `medium` / `complex`，影响检索广度等参数（见 `core/nodes/query_classifier.py` 等）。
-2. **混合检索**：同一查询在稠密向量（Milvus）与 BM25 上并行检索，使用 RRF（Reciprocal Rank Fusion）合并排序结果。
-3. **生成**：将召回片段与用户问题、会话历史送至 LLM 生成答复（支持流式输出由服务层接管）。
-4. **纠正（Corrective RAG）**：`evaluator` 节点依据检索相关性、答复长度等规则给出 `accept` / `retry` / `give_up`；为 `retry` 时触发 `re_retrieve`（扩大检索）并再次生成，重试上限由配置约束（参见 `core/graph.py`、`config.MAX_RETRIES`）。
+1. **意图与复杂度**：非教育类查询进入闲聊分支；教育类查询通过规则或模型划分为 `simple` / `medium` / `complex`，影响检索策略与广度（见 `core/nodes/query_classifier.py` 等）。LLM 分类的高置信度结果会自动写入 `data/intent_training_data.jsonl`，供后续微调 BERT 分类器。
+2. **策略选择**：根据意图和复杂度自动选择检索策略（见 `core/strategies/selector.py`）：
+   - `simple` → **DIRECT**：直接混合检索
+   - `medium` → **MULTI_QUERY**：LLM 生成多个查询变体，多路检索后 RRF 融合
+   - `complex` → **DECOMPOSITION**：LLM 将复杂问题拆解为子问题，分别检索后合并去重
+3. **混合检索**：每路查询在稠密向量（Milvus）与 BM25 上并行检索，使用 RRF 合并排序。
+4. **补充策略**：首轮检索后评估质量，若不达标则自动触发补充策略（见 `config.py` 中 `RETRIEVAL_QUALITY_THRESHOLD` 等参数）：
+   - **HyDE**：LLM 生成假设答案，用答案的 embedding 再检索（适合定义/事实类查询）
+   - **Step-Back**：LLM 抽象回退问题，用更一般的概念检索背景知识（适合结果过少时）
+5. **生成**：将召回片段与用户问题、会话历史送至 LLM 生成答复（支持流式输出）。
+6. **纠正（Corrective RAG）**：`evaluator` 节点依据检索相关性、答复长度等规则给出 `accept` / `retry` / `give_up`；为 `retry` 时触发 `re_retrieve`（扩大检索）并再次生成，重试上限由配置约束（参见 `core/graph.py`、`config.MAX_RETRIES`）。
+
+### 数据清洗流水线
+
+文件导入时自动执行四阶段清洗（`ingestion/cleaner.py`），确保入库数据质量：
+
+| 阶段 | 模块 | 说明 |
+|------|------|------|
+| 1. 规范化 | `Normalizer` | 编码统一、不可见字符移除、空格/换行规范化 |
+| 2. 去噪 | `Denoiser` | 页码/页眉页脚移除、目录/版权声明过滤、短文本丢弃、高频噪声抑制 |
+| 3. 结构修复 | `StructureRepairer` | 断句合并、残缺段落修复 |
+| 4. 校验 | `Validator` | 长度校验、内容Hash去重、质量评分 |
+
+清洗过程输出 `CleanStats`（含输入/输出数量、去重率、丢弃率等），并在处理结果中返回。
+
+**数据源适配**：
+- **文件源**：`FileSourceAdapter` 将 LangChain Document 转为清洗记录，清洗后回转为 Document
+- **SQL 源**：`SQLSourceAdapter` 封装数据库连接，支持流式读取、字段映射、条件过滤
+
+### SQL 数据导入
+
+通过 `POST /api/v1/documents/import/sql` 从关系数据库导入数据：
+
+```json
+{
+  "db_url": "mysql+pymysql://user:pass@host:3306/db",
+  "table_name": "knowledge_items",
+  "subject": "数学",
+  "grade": "七年级",
+  "field_map": {"title": "标题", "body": "正文"},
+  "id_column": "id",
+  "batch_size": 1000
+}
+```
+
+后端使用 SQLAlchemy 流式读取 + 游标分页，每批数据经清洗流水线处理后切片入库。详细设计见 [`spec/document_clean.md`](spec/document_clean.md)。
 
 ### RRF 融合公式
 
@@ -413,7 +505,7 @@ edu-rag/
 
 ### LangGraph 节点拓扑（概要）
 
-常规教育问答路径：`classify` → `retrieve` → `generate` → `evaluate` →（`accept`）`finalize` 结束；若为 `retry` 则 `re_retrieve` → `generate` → … 直至 `accept` 或达到重试上限后 `finalize`。非教育意图经 `classify` → `chitchat` → `finalize`，不执行向量检索。
+常规教育问答路径：`classify` → `select_strategy` → `retrieve` → `generate` → `evaluate` →（`accept`）`finalize` 结束；若为 `retry` 则 `re_retrieve`（含补充策略）→ `generate` → … 直至 `accept` 或达到重试上限后 `finalize`。非教育意图经 `classify` → `chitchat` → `finalize`，不执行向量检索。
 
 实现细节与条件边定义见 **`core/graph.py`**。行为变更以源代码及 **`GET /docs`** 为准。
 
@@ -437,3 +529,7 @@ edu-rag/
 | 检索结果为空、上下文类指标偏低 | 知识库为空、筛选过严或向量未入库 | 检查文档状态、`subject`/`grade`、`DENSE_MIN_SIMILARITY` |
 | Faithfulness 等结构化指标失败 | Instructor 输出被 `max_tokens` 截断 | 提高 **`RAGAS_LLM_MAX_TOKENS`** |
 | 控制台与纯 API 表现不一致 | 流式输出经服务层队列推送 | 对照 `services/rag_service.py` 与 `core/stream_queue.py` |
+| 多策略检索耗时过长 | 多查询/分解策略需多次 LLM 调用 | 调整 `MULTI_QUERY_VARIANTS`、`DECOMPOSITION_MAX_SUB` 降低变体数；或增大 `STRATEGY_TIMEOUT` |
+| 补充策略（HyDE/Step-Back）未触发 | 首轮检索质量已达标或阈值过高 | 检查 `RETRIEVAL_QUALITY_THRESHOLD`、`HYDE_MIN_SCORE`、`STEP_BACK_MIN_DOCS` 配置 |
+| 数据清洗丢弃了过多内容 | 去噪规则过于严格（页码/短文本/高频噪声） | 检查 `ingestion/cleaner.py` 中 `Denoiser` 的阈值和模式；观察 `CleanStats.dedup_rate` / `drop_rate` |
+| SQL 导入连接超时 | 数据库不可达或防火墙限制 | 确认 `db_url` 格式正确、网络可达；减小 `batch_size` 降低单次压力 |
