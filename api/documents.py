@@ -1,27 +1,27 @@
 """文档管理接口：上传、列表、删除文档，支持文件(PDF/MD/TXT)和SQL数据导入"""
 
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Request
 from models.schemas import (
     DocumentUploadResponse,
     DocumentListResponse,
     SQLImportRequest,
     SQLImportResponse,
 )
-from services.document_service import DocumentService
 from utils.logger import logger
 
 router = APIRouter(prefix="/api/v1/documents", tags=["文档管理"])
 
-document_service: DocumentService | None = None
 
-
-def init_router(service: DocumentService):
-    global document_service
-    document_service = service
+def get_document_service(request: Request):
+    service = getattr(request.app.state, "document_service", None)
+    if service is None:
+        raise HTTPException(status_code=503, detail="文档服务未初始化")
+    return service
 
 
 @router.post("/upload", response_model=DocumentUploadResponse)
 async def upload_document(
+    request: Request,
     file: UploadFile = File(..., description="待上传的文件"),
     subject: str = Form(..., description="学科"),
     grade: str = Form("", description="年级"),
@@ -29,8 +29,7 @@ async def upload_document(
     strategy: str = Form("recursive", description="切片策略"),
 ):
     """上传文档并自动处理入库（PDF/MD/TXT）"""
-    if document_service is None:
-        raise HTTPException(status_code=503, detail="文档服务未初始化")
+    document_service = get_document_service(request)
 
     if not file.filename:
         raise HTTPException(status_code=400, detail="文件名不能为空")
@@ -58,10 +57,9 @@ async def upload_document(
 
 
 @router.post("/import/sql", response_model=SQLImportResponse)
-async def import_sql(req: SQLImportRequest):
+async def import_sql(req: SQLImportRequest, request: Request):
     """从 SQL 数据库导入：后端连接数据库 → 流式读取 → 清洗 → 切片 → 入库"""
-    if document_service is None:
-        raise HTTPException(status_code=503, detail="文档服务未初始化")
+    document_service = get_document_service(request)
 
     if not req.db_url:
         raise HTTPException(status_code=400, detail="db_url 不能为空")
@@ -92,19 +90,17 @@ async def import_sql(req: SQLImportRequest):
 
 
 @router.get("/list", response_model=DocumentListResponse)
-async def list_documents():
+async def list_documents(request: Request):
     """获取文档列表"""
-    if document_service is None:
-        raise HTTPException(status_code=503, detail="文档服务未初始化")
+    document_service = get_document_service(request)
     docs = await document_service.list_documents()
     return DocumentListResponse(data=docs, total=len(docs))
 
 
 @router.delete("/{doc_id}")
-async def delete_document(doc_id: str):
+async def delete_document(doc_id: str, request: Request):
     """删除文档及其向量数据"""
-    if document_service is None:
-        raise HTTPException(status_code=503, detail="文档服务未初始化")
+    document_service = get_document_service(request)
     success = await document_service.delete_document(doc_id)
     if not success:
         raise HTTPException(status_code=404, detail="文档不存在")

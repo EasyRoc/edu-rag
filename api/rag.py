@@ -1,27 +1,24 @@
 """RAG 问答接口：处理用户提问并返回回答"""
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from models.schemas import AskRequest, AskResponse
-from services.rag_service import RAGService
 from utils.logger import logger
 
 router = APIRouter(prefix="/api/v1/rag", tags=["RAG 问答"])
 
-# 由 main.py 注入
-rag_service: RAGService | None = None
 
-
-def init_router(service: RAGService):
-    global rag_service
-    rag_service = service
+def get_rag_service(request: Request):
+    service = getattr(request.app.state, "rag_service", None)
+    if service is None:
+        raise HTTPException(status_code=503, detail="RAG 服务未初始化")
+    return service
 
 
 @router.post("/ask", response_model=AskResponse)
-async def ask_question(req: AskRequest):
+async def ask_question(req: AskRequest, request: Request):
     """RAG 问答接口：根据用户问题检索知识库并生成回答"""
-    if rag_service is None:
-        raise HTTPException(status_code=503, detail="RAG 服务未初始化")
+    rag_service = get_rag_service(request)
 
     logger.info(f"收到问答请求: query='{req.query[:50]}', subject={req.subject}, grade={req.grade}")
 
@@ -47,10 +44,9 @@ async def ask_question(req: AskRequest):
 
 
 @router.post("/ask-stream")
-async def ask_question_stream(req: AskRequest):
+async def ask_question_stream(req: AskRequest, request: Request):
     """流式 RAG 问答接口（SSE），逐 token 返回回答"""
-    if rag_service is None:
-        raise HTTPException(status_code=503, detail="RAG 服务未初始化")
+    rag_service = get_rag_service(request)
 
     logger.info(f"收到流式问答请求: query='{req.query[:50]}', subject={req.subject}, grade={req.grade}")
 

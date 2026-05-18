@@ -324,8 +324,9 @@ class K12VectorStore:
         max_score = scored_docs[0][0] if scored_docs else 1
         results = []
         for score, doc in scored_docs[:top_k]:
-            doc["score"] = round(score / max_score, 4)
-            results.append(doc)
+            result_doc = dict(doc)
+            result_doc["score"] = round(score / max_score, 4)
+            results.append(result_doc)
 
         return results
 

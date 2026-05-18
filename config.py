@@ -5,6 +5,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # 国内 HuggingFace 镜像配置
 if os.getenv("HF_ENDPOINT"):
     os.environ["HF_ENDPOINT"] = os.getenv("HF_ENDPOINT")
@@ -24,14 +26,13 @@ class Settings:
     # ---------- Milvus Lite 配置 ----------
     # 注意: 避免用 MILVUS_URI 命名（pymilvus 内部也读这个环境变量，会冲突）
     MILVUS_URI: str = os.getenv("K12_MILVUS_URI", "./milvus_k12.db")
+    UPLOAD_DIR: str = os.getenv("UPLOAD_DIR", os.path.join(BASE_DIR, "uploaded_docs"))
 
     # ---------- Embedding 配置 ----------
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-zh-v1.5")
     EMBEDDING_DEVICE: str = os.getenv("EMBEDDING_DEVICE", "cpu")
 
     # ---------- 意图识别配置 ----------
-    CONFIDENCE_THRESHOLD: float = 0.7    # BERT 结果可接受的最低置信度
-    BERT_MAX_LENGTH: int = 128           # BERT 输入的最大 token 长度
     LLM_TIMEOUT_SECONDS: int = 3         # LLM 分类调用超时
     ENABLE_LLM_FALLBACK: bool = True     # 是否启用 LLM 兜底
 
@@ -65,7 +66,7 @@ class Settings:
     MILVUS_COLLECTION: str = "k12_knowledge_base"
 
     # ---------- SQLite 数据库路径 ----------
-    DATABASE_URL: str = f"sqlite+aiosqlite:///{os.path.dirname(os.path.abspath(__file__))}/k12_business.db"
+    DATABASE_URL: str = os.getenv("DATABASE_URL", f"sqlite+aiosqlite:///{BASE_DIR}/k12_business.db")
 
 
 settings = Settings()

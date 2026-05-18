@@ -56,7 +56,7 @@ def _add_evaluate_parser(subparsers) -> None:
 
 async def _cmd_evaluate(args: argparse.Namespace) -> None:
     from evaluation.pipeline import run_live_evaluation
-    from main import _vector_store
+    from main import build_app_state
 
     dataset: Dataset | None = None
     if args.from_db:
@@ -64,13 +64,14 @@ async def _cmd_evaluate(args: argparse.Namespace) -> None:
         dataset = await EvalDatasetBuilder.from_db(limit=args.limit, subject=args.subject)
     elif args.from_file and args.live:
         print(f"实时评估模式: {args.from_file}")
+        app_state = build_app_state()
         items = EvalDatasetBuilder.from_file(args.from_file)
         questions = [items[i]["question"] for i in range(len(items))]
         ground_truths = [items[i].get("ground_truth", "") for i in range(len(items))]
         metrics = args.metrics.split(",") if args.metrics else None
         result = await run_live_evaluation(
             questions=questions,
-            vector_store=_vector_store,
+            vector_store=app_state.vector_store,
             subject=args.subject,
             grade=args.grade,
             metrics=metrics,
@@ -121,12 +122,13 @@ def _add_generate_parser(subparsers) -> None:
 
 
 async def _cmd_generate(args: argparse.Namespace) -> None:
-    from main import _vector_store
+    from main import build_app_state
 
     print(f"生成测试集: subject={args.subject}, grade={args.grade}, count={args.count}")
+    app_state = build_app_state()
     generator = TestSetGenerator()
     items = await generator.from_vectorestore(
-        vector_store=_vector_store,
+        vector_store=app_state.vector_store,
         subject=args.subject,
         grade=args.grade,
         count=args.count,

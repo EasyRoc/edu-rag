@@ -70,3 +70,4 @@ def _load_markdown(file_path: str) -> list[Document]:
     for doc in docs:
         doc.metadata["source_file"] = os.path.basename(file_path)
         doc.metadata["file_type"] = "md"
+    return docs

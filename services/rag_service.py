@@ -2,15 +2,34 @@
 
 import time
 import json
-import uuid
 import asyncio
 from typing import AsyncGenerator, Any
 
-from core.graph import RAGState
-from core.stream_queue import _registry as _stream_queues
+from core.state import RAGState
+from core.stream_queue import stream_queues
 from core.vectorestore import K12VectorStore
 from models.db_models import QARecord, get_session_maker
 from utils.logger import logger
+
+
+def format_references(docs: list[dict]) -> list[dict]:
+    """Format retrieved docs into the API-compatible references shape."""
+    references = []
+    for doc in docs:
+        reference = {
+            "index": len(references) + 1,
+            "chunk_id": doc.get("id"),
+            "text": doc.get("text", "")[:200],
+            "source_file": doc.get("source_file") or doc.get("doc_id") or "未知来源",
+            "page": doc.get("page", 0),
+            "chapter": doc.get("chapter", ""),
+            "score": round(doc.get("score", 0), 4),
+            "subject": doc.get("subject", ""),
+            "grade": doc.get("grade", ""),
+        }
+        reference["source"] = doc.get("doc_id", "")
+        references.append(reference)
+    return references
 
 
 class RAGService:
@@ -73,22 +92,7 @@ class RAGService:
         elapsed = int((time.time() - start_time) * 1000)
         logger.info(f"RAG 流程完成，耗时: {elapsed}ms")
 
-        # 组装引用信息
-        references = []
-        for doc in final_state.get("retrieved_docs", []):
-            references.append({
-                "index": len(references) + 1,
-                "chunk_id": doc.get("id"),
-                "text": doc.get("text", "")[:200],
-                "source_file": doc.get("source_file") or doc.get("doc_id") or "未知来源",
-                "page": doc.get("page", 0),
-                "chapter": doc.get("chapter", ""),
-                "score": round(doc.get("score", 0), 4),
-                "subject": doc.get("subject", ""),
-                "grade": doc.get("grade", ""),
-            })
-            # 保留 source 字段向后兼容
-            references[-1]["source"] = doc.get("doc_id", "")
+        references = format_references(final_state.get("retrieved_docs", []))
 
         answer = final_state.get("answer", "抱歉，暂时无法回答该问题。")
 
@@ -146,9 +150,7 @@ class RAGService:
             return payload.encode("utf-8")
 
         # 创建 token 队列，通过全局注册表传递（避免 Queue 直接放入 LangGraph state 导致深拷贝失败）
-        queue_id = str(uuid.uuid4())
-        stream_queue: asyncio.Queue = asyncio.Queue()
-        _stream_queues[queue_id] = stream_queue
+        queue_id, stream_queue = stream_queues.create()
 
         initial_state = self._build_initial_state(query, subject, grade, user_id)
         initial_state["_queue_id"] = queue_id
@@ -202,7 +204,7 @@ class RAGService:
             logger.warning("流式请求被取消")
             return
         finally:
-            _stream_queues.pop(queue_id, None)
+            stream_queues.remove(queue_id)
 
         # 计算最终回答（处理不同分支）
         if graph_error:
@@ -217,21 +219,7 @@ class RAGService:
             final_complexity = "simple"
         else:
             final_answer = final_state.get("answer", full_answer)
-            references = []
-            for doc in final_state.get("retrieved_docs", []):
-                references.append({
-                    "index": len(references) + 1,
-                    "chunk_id": doc.get("id"),
-                    "text": doc.get("text", "")[:200],
-                    "source_file": doc.get("source_file") or doc.get("doc_id") or "未知来源",
-                    "page": doc.get("page", 0),
-                    "chapter": doc.get("chapter", ""),
-                    "score": round(doc.get("score", 0), 4),
-                    "subject": doc.get("subject", ""),
-                    "grade": doc.get("grade", ""),
-                })
-                # 保留 source 字段向后兼容
-                references[-1]["source"] = doc.get("doc_id", "")
+            references = format_references(final_state.get("retrieved_docs", []))
             final_complexity = final_state.get("complexity", "medium")
 
         elapsed = int((time.time() - start_time) * 1000)

@@ -3,11 +3,8 @@
 from __future__ import annotations
 
 import json
-import io
+from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
-
-from config import settings
 from evaluation.dataset_builder import EvalDatasetBuilder
 from evaluation.pipeline import run_evaluation, run_live_evaluation
 from evaluation.schemas import eval_result_to_dict
@@ -18,12 +15,12 @@ from utils.logger import logger
 
 router = APIRouter(prefix="/api/v1/evaluation", tags=["RAGAS 评估"])
 
-_vector_store = None
 
-
-def init_router(vector_store):
-    global _vector_store
-    _vector_store = vector_store
+def get_vector_store(request: Request):
+    vector_store = getattr(request.app.state, "vector_store", None)
+    if vector_store is None:
+        raise HTTPException(status_code=503, detail="向量存储未初始化")
+    return vector_store
 
 
 # ----------------------------------------------------------------
@@ -71,6 +68,7 @@ def _parse_testset(raw: str) -> list[dict]:
 
 @router.post("/from-content", response_model=AskResponse)
 async def evaluate_from_content(
+    request: Request,
     file: UploadFile | None = File(None, description="上传 JSON/JSONL 测试集文件"),
     content: str | None = Form(None, description="直接粘贴的 JSON/JSONL 内容"),
     metrics: str | None = Form(None, description="评估指标，逗号分隔"),
@@ -78,8 +76,7 @@ async def evaluate_from_content(
     grade: str | None = Form(None),
 ):
     """上传测试集文件或粘贴内容，运行实时评估（先 RAG 回答再 RAGAS 打分）"""
-    if _vector_store is None:
-        raise HTTPException(status_code=503, detail="向量存储未初始化")
+    vector_store = get_vector_store(request)
 
     raw = ""
     if file:
@@ -101,7 +98,7 @@ async def evaluate_from_content(
     metric_list = metrics.split(",") if metrics else None
     result = await run_live_evaluation(
         questions=questions,
-        vector_store=_vector_store,
+        vector_store=vector_store,
         subject=subject or None,
         grade=grade or None,
         metrics=metric_list,
@@ -135,18 +132,18 @@ async def evaluate_from_file(
 # ----------------------------------------------------------------
 @router.post("/live", response_model=AskResponse)
 async def evaluate_live(
+    request: Request,
     questions: list[str] = Query(..., description="待评估的问题列表"),
     subject: str | None = Query(None),
     grade: str | None = Query(None),
     metrics: str | None = Query(None),
 ):
     """实时问答 + 评估：先让 RAG 系统回答问题，再用 RAGAS 评估"""
-    if _vector_store is None:
-        raise HTTPException(status_code=503, detail="向量存储未初始化")
+    vector_store = get_vector_store(request)
     metric_list = metrics.split(",") if metrics else None
     result = await run_live_evaluation(
         questions=questions,
-        vector_store=_vector_store,
+        vector_store=vector_store,
         subject=subject,
         grade=grade,
         metrics=metric_list,

@@ -1,35 +1,16 @@
-from typing import TypedDict, Literal
+from typing import Literal
 
 from core.nodes.chitchat import chitchat_node
 from core.nodes.evaluator import evaluate_quality
 from core.nodes.generator import llm_generate_stream
 from core.nodes.query_classifier import classify_query, classify_intent_async
 from core.nodes.retriever import hybrid_retrieve
-from core.stream_queue import _registry as _stream_queues
+from core.state import MAX_ROUNDS, RAGState
+from core.stream_queue import stream_queues
 from core.vectorestore import K12VectorStore
 from utils.logger import logger
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
-
-MAX_ROUNDS = 10  # 最多保留的对话轮数
-
-# ==================== 状态定义 ====================
-class RAGState(TypedDict):
-    """RAG 流程的全局状态"""
-    query: str  # 用户原始查询
-    subject: str | None  # 学科过滤
-    grade: str | None  # 年级过滤
-    intent: str  # 查询意图: educational / chitchat
-    complexity: str  # 查询复杂度: simple / medium / complex
-    retrieved_docs: list  # 检索结果文档列表
-    answer: str  # 生成的回答
-    evaluation_reason: str  # 评估结果原因
-    evaluation_decision: str  # 评估决策: accept / retry / give_up
-    retry_count: int  # 当前重试次数
-    max_retries: int  # 最大重试次数
-    conversation_history: list[dict]  # 短期记忆: [{"role": "user"/"assistant", "content": "..."}]
-    # 运行时注入（不在 TypedDict 中声明会导致 astream 过滤掉这些 key）
-    _queue_id: str  # 流式 token 队列 ID，通过全局 _stream_queues 查找
 
 
 # ==================== 图节点函数 ====================
@@ -74,7 +55,7 @@ async def generate_node(state: RAGState) -> dict:
     """LLM 生成节点：调用 LLM 生成回答，同时通过全局队列推送 token 实现流式"""
     logger.info(f"[节点] generate: retry_count={state.get('retry_count', 0)}")
     queue_id = state.get("_queue_id")
-    stream_queue = _stream_queues.get(queue_id) if queue_id else None
+    stream_queue = stream_queues.get(queue_id)
     full_answer = ""
     try:
         async for token in llm_generate_stream(
