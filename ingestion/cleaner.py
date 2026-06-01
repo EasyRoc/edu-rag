@@ -159,7 +159,6 @@ class StructureRepairer:
     _MD_BOLD = re.compile(r'\*\*([^*]+)\*\*')
     _MD_ITALIC = re.compile(r'\*([^*]+)\*')
     _MD_CODE = re.compile(r'`([^`]+)`')
-    _MD_HEADING = re.compile(r'^#{1,6}\s+', re.MULTILINE)
     _MD_LIST = re.compile(r'^[\s]*[-*+]\s+', re.MULTILINE)
     _MD_HR = re.compile(r'^[-*_]{3,}\s*$', re.MULTILINE)
 
@@ -180,9 +179,7 @@ class StructureRepairer:
         return text
 
     def _repair_markdown(self, text: str) -> str:
-        """Markdown：提取标题结构，去除 markdown 符号"""
-        # 保留标题文本但去掉 # 符号
-        text = self._MD_HEADING.sub('', text)
+        """Markdown：去除格式符号，保留标题标记（供下游分片使用）"""
         text = self._MD_HR.sub('', text)
         text = self._MD_LIST.sub('', text)
         # 链接：保留文本
@@ -272,6 +269,21 @@ class MetadataBuilder:
         return meta
 
 
+# ==================== 文档预分割 ====================
+
+
+def pre_split_docs(docs: list, max_chunk_size: int = 1024) -> list:
+    """文档预分割：将大 Document 按段落边界拆小，提升后续清洗质量和性能"""
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=max_chunk_size,
+        chunk_overlap=0,
+        separators=["\n\n", "\n", "。", "！", "？", ".", "!", "?", " ", ""],
+    )
+    return splitter.split_documents(docs)
+
+
 # ==================== 清洗流水线 ====================
 
 class CleaningPipeline:
@@ -296,35 +308,35 @@ class CleaningPipeline:
         extra: dict | None = None,
     ) -> CleanRecord | None:
         """清洗单条记录，返回 CleanRecord 或 None（被过滤）"""
-        # 1. Normalize
+        # 1. 规范化
         text = self.normalizer.normalize(content)
         if not text:
             return None
 
-        # 2. Denoise
+        # 2. 去噪
         text = self.denoiser.denoise(text, source_type)
         if not text:
             return None
 
-        # 3. Structure Repair
+        # 3. 结构修复
         text = self.repairer.repair(text, source_type)
         if not text:
             return None
 
-        # 4. Generate ID & Hash
+        # 4. 生成 ID 和哈希
         doc_id = IdGenerator.generate_readable(source_type, source_id, position)
         content_hash = HashGenerator.generate(text)
 
-        # 5. Dedup check
+        # 5. 去重检查
         if content_hash in self._seen_hashes:
             return None
         self._seen_hashes.add(content_hash)
 
-        # 6. Quality filter
+        # 6. 质量过滤
         if not self.quality_filter.should_keep(text):
             return None
 
-        # 7. Build metadata
+        # 7. 构建元数据
         meta = MetadataBuilder.build(
             source_type=source_type,
             source_id=source_id,

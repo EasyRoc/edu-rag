@@ -13,6 +13,7 @@ from ingestion.cleaner import (
     FileSourceAdapter,
     SQLSourceAdapter,
     CleanStats,
+    pre_split_docs,
 )
 from core.vectorestore import K12VectorStore
 from utils.logger import logger
@@ -206,6 +207,10 @@ class IngestionPipeline:
         """对加载后的文档执行清洗，返回清洗后的 langchain Document 列表"""
         cleaner = CleaningPipeline()
         source_id = os.path.basename(file_path)
+
+        # 预分割：将大 Document 按段落边界拆小，提升清洗质量和性能
+        docs = pre_split_docs(docs)
+
         records = FileSourceAdapter.doc_to_records(docs)
 
         clean_results, stats = cleaner.clean_batch(

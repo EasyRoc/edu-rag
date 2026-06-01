@@ -64,7 +64,7 @@ def _load_text(file_path: str) -> list[Document]:
 def _load_markdown(file_path: str) -> list[Document]:
     """加载 Markdown 文件"""
     logger.info("使用 UnstructuredMarkdownLoader 加载 Markdown")
-    loader = UnstructuredMarkdownLoader(file_path, mode="elements")
+    loader = UnstructuredMarkdownLoader(file_path, mode="single")
     docs = loader.load()
     logger.info(f"Markdown 加载完成，共 {len(docs)} 个元素")
     for doc in docs:
