@@ -1,55 +1,56 @@
-"""评估节点：Corrective RAG 的质量评估与纠正决策
+"""评估节点：Corrective RAG 的检索质量评估与纠正决策
 
-评估生成的回答是否基于检索文档、是否完整、是否出现幻觉。
+评估检索结果是否足以支撑回答，决定接受/重试/放弃。
 """
 from typing import Literal
 
+from config import settings
 from utils.logger import logger
 
 
-def evaluate_quality(
-    query: str,
-    answer: str,
+def evaluate_retrieval(
     retrieved_docs: list[dict],
-    retry_count: int,
+    retry_count: int = 0,
     max_retries: int = 2,
 ) -> tuple[Literal["accept", "retry", "give_up"], str]:
     """
-    评估生成回答的质量，决定下一步动作。
+    评估检索结果质量，决定下一步动作。
 
-    评估维度：
-    1. 是否有检索结果
-    2. 回答是否非空
-    3. 检索结果的相关性（通过 score 判断）
-    4. 是否有足够的上下文
+    评估维度（按优先级）：
+    1. 检索结果是否为空
+    2. 结果数量和平均相关性是否达标
+    3. top-1 score 是否过低
 
     返回:
         (决策, 评估原因)
     """
-    logger.info(f"质量评估: retry_count={retry_count}/{max_retries}")
-    # 1. 无检索结果
+    threshold = getattr(settings, "RETRIEVAL_QUALITY_THRESHOLD", 0.5)
+    min_docs = getattr(settings, "RETRIEVAL_MIN_DOCS", 2)
+
     if not retrieved_docs:
-        logger.warning("评估结果: give_up — 没有检索到任何相关文档")
-        return "give_up", "未检索到相关文档"
-    # 2. 回答为空
-    if not answer or len(answer.strip()) < 5:
         if retry_count < max_retries:
-            logger.warning("评估结果: retry — 回答为空或过短")
-            return "retry","回答内容为空或过短"
-        else:
-            logger.warning("评估结果: give_up — 回答为空且已达到最大重试次数")
-            return "give_up", "多次尝试后仍无法生成有效回答"
+            logger.warning("评估结果: retry — 未检索到任何文档")
+            return "retry", "未检索到任何文档"
+        logger.warning("评估结果: give_up — 多次检索均无结果")
+        return "give_up", "多次检索均未找到相关文档"
 
-    # 3. 检查最高分的检索结果是否足够相关
-    max_score = max(doc.get("score", 0) for doc in retrieved_docs)
-    if max_score < 0.5 and retry_count < max_retries:
-        logger.warning(f"评估结果: retry — 检索相关性偏低 (max_score={max_score:.3f})")
-        return "retry", f"检索结果相关性不足 (最高分: {max_score:.3f})"
+    avg_score = sum(d["score"] for d in retrieved_docs) / len(retrieved_docs)
+    top_score = retrieved_docs[0]["score"]
+    enough_docs = len(retrieved_docs) >= min_docs
 
-    # 4. 通过评估
-    logger.info(f"评估结果: accept — 回答质量合格 (docs={len(retrieved_docs)}, max_score={max_score:.3f})")
-    return "accept", "回答质量合格"
+    if avg_score >= threshold and enough_docs:
+        logger.info(f"评估结果: accept — avg={avg_score:.3f}, top1={top_score:.3f}, count={len(retrieved_docs)}")
+        return "accept", "检索质量合格"
 
-def decide_next_step(evaluation_result: tuple) -> Literal["accept", "retry", "give_up"]:
-    """从评估结果元组中提取决策"""
-    return evaluation_result[0]
+    if retry_count < max_retries:
+        reason_parts = []
+        if avg_score < threshold:
+            reason_parts.append(f"avg_score={avg_score:.3f} < {threshold}")
+        if not enough_docs:
+            reason_parts.append(f"count={len(retrieved_docs)} < {min_docs}")
+        reason = "检索质量不足: " + ", ".join(reason_parts)
+        logger.warning(f"评估结果: retry — {reason}")
+        return "retry", reason
+
+    logger.warning(f"评估结果: give_up — 重试{max_retries}次后质量仍不达标 (avg={avg_score:.3f})")
+    return "give_up", f"多次重试后检索质量仍不达标 (avg_score={avg_score:.3f})"

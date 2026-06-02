@@ -1,13 +1,14 @@
 from typing import Literal
 
 from core.nodes.chitchat import chitchat_node
-from core.nodes.evaluator import evaluate_quality
+from core.nodes.evaluator import evaluate_retrieval
 from core.nodes.generator import llm_generate_stream
 from core.nodes.query_classifier import classify_query, classify_intent_async
 from core.nodes.retriever import hybrid_retrieve
 from core.state import MAX_ROUNDS, RAGState
 from core.stream_queue import stream_queues
 from core.vectorestore import K12VectorStore
+from core.strategies import generate_query_variants
 from utils.logger import logger
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
@@ -75,11 +76,9 @@ async def generate_node(state: RAGState) -> dict:
 
 
 async def evaluate_node(state: RAGState) -> dict:
-    """质量评估节点"""
+    """检索质量评估节点：在检索后、生成前评估文档质量"""
     logger.info(f"[节点] evaluate: retry_count={state.get('retry_count', 0)}")
-    decision, reason = evaluate_quality(
-        query=state["query"],
-        answer=state.get("answer", ""),
+    decision, reason = evaluate_retrieval(
         retrieved_docs=state.get("retrieved_docs", []),
         retry_count=state.get("retry_count", 0),
         max_retries=state.get("max_retries", 2),
@@ -88,33 +87,39 @@ async def evaluate_node(state: RAGState) -> dict:
 
 
 async def re_retrieve_node(state: RAGState) -> dict:
-    """重新检索节点（纠正时触发，直接扩大检索深度，不触发额外策略）"""
-    logger.info(f"[节点] re_retrieve: 第 {state.get('retry_count', 0) + 1} 次重试")
+    """重新检索节点：改写 query 后扩大检索范围"""
+    retry = state.get("retry_count", 0) + 1
+    logger.info(f"[节点] re_retrieve: 第 {retry} 次重试，query 改写中...")
     vector_store: K12VectorStore = state.get("_vector_store")
+    # Query rewrite：生成变体取最优，改写失败则用原 query
+    variants = await generate_query_variants(state["query"])
+    rewritten = variants[0] if variants else state["query"]
+    if rewritten != state["query"]:
+        logger.info(f"[节点] re_retrieve: query 改写 '{state['query'][:30]}...' → '{rewritten[:30]}...'")
     docs = vector_store.hybrid_search(
-        query=state["query"],
+        query=rewritten,
         subject=state.get("subject"),
         grade=state.get("grade"),
-        top_k=8,  # 重试时扩大检索
+        top_k=8,
     )
     return {
         "retrieved_docs": docs,
-        "retry_count": state.get("retry_count", 0) + 1,
+        "retry_count": retry,
     }
 
 
 # ==================== 图构建 ====================
 def should_continue(state: RAGState) -> Literal["accept", "retry", "give_up"]:
-    """条件边：根据评估结果决定流程走向"""
+    """条件边：根据检索质量评估结果决定流程走向"""
     decision = state.get("evaluation_decision", "give_up")
     if decision == "accept":
-        logger.info("[条件边] 评估通过 -> 结束")
+        logger.info("[条件边] 检索质量合格 -> 生成回答")
         return "accept"
-    elif decision == "retry" and state.get("retry_count", 0) < state.get("max_retries", 2):
-        logger.info(f"[条件边] 需要重试 (第 {state.get('retry_count', 0) + 1} 次)")
+    elif decision == "retry":
+        logger.info(f"[条件边] 检索质量不足 -> 改写 query 重新检索 (第 {state.get('retry_count', 0) + 1} 次)")
         return "retry"
     else:
-        logger.info("[条件边] 无法完成 -> 结束")
+        logger.info("[条件边] 检索放弃 -> 降级生成（无检索上下文）")
         return "give_up"
 
 
@@ -165,20 +170,19 @@ def build_rag_graph(vector_store: K12VectorStore):
         "chitchat": "chitchat",
     })
     workflow.add_edge("chitchat", "finalize")
-    workflow.add_edge("retrieve", "generate")
-    workflow.add_edge("generate", "evaluate")
-
-    # 条件边：从 evaluate 根据质量分流向
+    # CRAG 流程: retrieve → evaluate → {accept: generate, retry: re_retrieve, give_up: generate}
+    workflow.add_edge("retrieve", "evaluate")
     workflow.add_conditional_edges(
         "evaluate",
         should_continue,
         {
-            "accept": "finalize",
+            "accept": "generate",
             "retry": "re_retrieve",
-            "give_up": "finalize",
+            "give_up": "generate",
         },
     )
-    workflow.add_edge("re_retrieve", "generate")
+    workflow.add_edge("re_retrieve", "evaluate")  # 重新检索后回到评估
+    workflow.add_edge("generate", "finalize")
     workflow.add_edge("finalize", END)
 
     app = workflow.compile(checkpointer=MemorySaver())
