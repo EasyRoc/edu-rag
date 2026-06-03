@@ -80,71 +80,25 @@ def test_strategy_selection(result: TestResult, verbose: bool = False):
         print(f"  StrategyType values: {[s.value for s in StrategyType]}")
 
 
-def test_quality_assessment(result: TestResult, verbose: bool = False):
-    header("单元测试: 检索质量评估")
-    from core.strategies.selector import assess_retrieval_quality
+def test_quality_gate(result: TestResult, verbose: bool = False):
+    header("单元测试: 统一检索门控")
+    from core.retrieval_quality import evaluate_retrieval_gate
 
-    # U05: 高质量结果通过
     high_docs = [
-        {"score": 0.9, "text": "d1"},
-        {"score": 0.8, "text": "d2"},
-        {"score": 0.7, "text": "d3"},
+        {"rerank_score": 0.9, "text": "d1"},
+        {"rerank_score": 0.8, "text": "d2"},
     ]
-    result.add("U05: 高质量结果通过", assess_retrieval_quality(high_docs) is True)
+    result.add("U05: 高质量结果通过", evaluate_retrieval_gate(high_docs)["action"] == "accept")
 
-    # U06: 低平均分不通过
-    low_docs = [{"score": 0.3, "text": "d1"}, {"score": 0.2, "text": "d2"}]
-    result.add("U06: 低平均分不通过", assess_retrieval_quality(low_docs) is False)
+    low_docs = [{"rerank_score": 0.3, "text": "d1"}]
+    result.add("U06: 低分结果触发重试", evaluate_retrieval_gate(low_docs)["action"] == "retry")
 
-    # U07: 结果数量不足
-    few_docs = [{"score": 0.9, "text": "d1"}, {"score": 0.8, "text": "d2"}]
-    result.add("U07: 结果不足3条不通过", assess_retrieval_quality(few_docs) is False)
+    result.add("U07: 空结果触发重试", evaluate_retrieval_gate([])["action"] == "retry")
 
-    # U08: 空结果不通过
-    result.add("U08: 空结果不通过", assess_retrieval_quality([]) is False)
-
-    # 边界：刚好过线
-    border_docs = [
-        {"score": 0.5, "text": "d1"},
-        {"score": 0.5, "text": "d2"},
-        {"score": 0.5, "text": "d3"},
-    ]
-    result.add("边界: avg=0.5, count=3 通过", assess_retrieval_quality(border_docs) is True)
-
-
-def test_hyde_step_back_triggers(result: TestResult, verbose: bool = False):
-    header("单元测试: HyDE / Step-Back 触发条件")
-    from core.strategies.selector import should_apply_hyde, should_apply_step_back
-
-    # U09: top1 < 0.4 触发 HyDE
-    result.add("U09: top1=0.3 触发HyDE",
-               should_apply_hyde([{"score": 0.3}]) is True)
-    result.add("U09: top1=0.2 触发HyDE",
-               should_apply_hyde([{"score": 0.2, "text": "x"}, {"score": 0.1}]) is True)
-
-    # U10: top1 >= 0.4 不触发 HyDE
-    result.add("U10: top1=0.9 不触发HyDE",
-               should_apply_hyde([{"score": 0.9}]) is False)
-    result.add("U10: top1=0.4 不触发HyDE(边界)",
-               should_apply_hyde([{"score": 0.4}]) is False)
-
-    # 空结果触发
-    result.add("空结果触发HyDE", should_apply_hyde([]) is True)
-    result.add("空结果触发StepBack", should_apply_step_back([]) is True)
-
-    # Step-Back 触发：少结果
-    result.add("仅有1条结果触发StepBack",
-               should_apply_step_back([{"score": 0.9}]) is True)
-    # Step-Back 不触发：足够多且分高
-    result.add("3条高分结果不触发StepBack",
-               should_apply_step_back([
-                   {"score": 0.9}, {"score": 0.8}, {"score": 0.7}
-               ]) is False)
-
-    if verbose:
-        print(f"  HYDE_MIN_SCORE={getattr(settings, 'HYDE_MIN_SCORE', 0.4)}")
-        print(f"  STEP_BACK_MIN_DOCS={getattr(settings, 'STEP_BACK_MIN_DOCS', 3)}")
-        print(f"  RETRIEVAL_QUALITY_THRESHOLD={getattr(settings, 'RETRIEVAL_QUALITY_THRESHOLD', 0.5)}")
+    result.add(
+        "U08: 重试耗尽后拒答",
+        evaluate_retrieval_gate(low_docs, retry_count=2, max_retries=2)["action"] == "abstain",
+    )
 
 
 def test_multi_query_fusion(result: TestResult, verbose: bool = False):
@@ -256,8 +210,7 @@ def test_variant_parsing(result: TestResult, verbose: bool = False):
 def run_unit_tests(verbose: bool = False) -> TestResult:
     result = TestResult()
     test_strategy_selection(result, verbose)
-    test_quality_assessment(result, verbose)
-    test_hyde_step_back_triggers(result, verbose)
+    test_quality_gate(result, verbose)
     test_multi_query_fusion(result, verbose)
     test_merge_sub_results(result, verbose)
     test_variant_parsing(result, verbose)
@@ -410,16 +363,16 @@ def test_config_values(result: TestResult, verbose: bool = False):
     header("集成测试: 配置项读取")
     result.add("MULTI_QUERY_VARIANTS存在", hasattr(settings, 'MULTI_QUERY_VARIANTS'))
     result.add("DECOMPOSITION_MAX_SUB存在", hasattr(settings, 'DECOMPOSITION_MAX_SUB'))
-    result.add("RETRIEVAL_QUALITY_THRESHOLD存在", hasattr(settings, 'RETRIEVAL_QUALITY_THRESHOLD'))
-    result.add("HYDE_MIN_SCORE存在", hasattr(settings, 'HYDE_MIN_SCORE'))
-    result.add("STEP_BACK_MIN_DOCS存在", hasattr(settings, 'STEP_BACK_MIN_DOCS'))
+    result.add("RETRIEVAL_CANDIDATE_TOP_K存在", hasattr(settings, 'RETRIEVAL_CANDIDATE_TOP_K'))
+    result.add("RERANKER_RELEVANCE_THRESHOLD存在", hasattr(settings, 'RERANKER_RELEVANCE_THRESHOLD'))
+    result.add("RETRIEVAL_ACCEPT_TOP1_THRESHOLD存在", hasattr(settings, 'RETRIEVAL_ACCEPT_TOP1_THRESHOLD'))
 
     if verbose:
         print(f"  MULTI_QUERY_VARIANTS={settings.MULTI_QUERY_VARIANTS}")
         print(f"  DECOMPOSITION_MAX_SUB={settings.DECOMPOSITION_MAX_SUB}")
-        print(f"  RETRIEVAL_QUALITY_THRESHOLD={settings.RETRIEVAL_QUALITY_THRESHOLD}")
-        print(f"  HYDE_MIN_SCORE={settings.HYDE_MIN_SCORE}")
-        print(f"  STEP_BACK_MIN_DOCS={settings.STEP_BACK_MIN_DOCS}")
+        print(f"  RETRIEVAL_CANDIDATE_TOP_K={settings.RETRIEVAL_CANDIDATE_TOP_K}")
+        print(f"  RERANKER_RELEVANCE_THRESHOLD={settings.RERANKER_RELEVANCE_THRESHOLD}")
+        print(f"  RETRIEVAL_ACCEPT_TOP1_THRESHOLD={settings.RETRIEVAL_ACCEPT_TOP1_THRESHOLD}")
 
 
 def run_integration_tests(verbose: bool = False) -> TestResult:

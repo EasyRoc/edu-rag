@@ -184,7 +184,7 @@ graph TB
 
 | 类别 | 包名（节选） | 说明 |
 |------|----------------|------|
-| 向量与检索 | `pymilvus>=2.4.2` | Milvus 客户端（含 Lite 场景） |
+| 向量与检索 | `pymilvus[milvus_lite]>=2.4.2`、`milvus-lite>=2.4.0,<3.0.0` | Milvus 客户端与兼容现有单文件数据库的 Lite 运行时 |
 | 应用框架 | `fastapi>=0.110.0`、`uvicorn[standard]>=0.27.0` | HTTP 服务 |
 | LangGraph / LangChain | `langchain>=1.2.0`、`langchain-core`、`langchain-community`、`langchain-milvus`、`langchain-openai` | 编排与生态组件 |
 | 向量化 | `sentence-transformers>=3.0.0` | Embedding 推理 |
@@ -303,6 +303,17 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 - **命令行**：见 [`evaluation/cli.py`](evaluation/cli.py)：`evaluate`（`--from-db`、`--from-file`、`--live` 等）、`generate`、`validate`、`export` 等子命令。  
 - **运行参数**：Faithfulness / Context 等依赖 Instructor 结构化输出，若单次生成长度过长导致截断，应提高环境变量 **`RAGAS_LLM_MAX_TOKENS`**；若检索上下文为空，上下文相关指标可能无效或分值异常，请核对知识库数据与检索过滤条件。
 
+### 检索评估与阈值校准
+
+检索评估与 RAGAS 并列运行，只衡量召回、排序、门控误判和重试收益。标注集采用 JSONL，每条包含 `question`、`answerable` 和 `relevant_chunk_ids`；不可回答问题将 `relevant_chunk_ids` 设为空数组。
+
+```bash
+python evaluation/cli.py retrieval-evaluate --from-file data/test_sets/retrieval_manual_v1.jsonl
+python evaluation/cli.py retrieval-calibrate --from-file data/test_sets/retrieval_manual_v1.jsonl --max-false-accept-rate 0.05
+```
+
+输出包含 `Recall@5/10/20`、`Precision@5`、`MRR@10`、`nDCG@10`、错误接受率、错误拒绝率、拒答准确率、重试恢复率、延迟分位数和分组切片。示例文件中的 chunk ID 仅用于展示格式，正式运行前应基于当前向量库完成标注。
+
 ---
 
 ## 数据持久化与本地资源
@@ -325,7 +336,8 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 | [`sample_docs/`](sample_docs/) | 语文/数学等小样本教材片段，可配合「文档上传」走通入库与问答 |
 | [`evaluation/sample_test.json`](evaluation/sample_test.json) | 含 `question` / `contexts` / `ground_truth` 的 JSON 示例，适合理解 RAGAS 输入形态 |
 | [`data/test_sets/manual_v1.jsonl`](data/test_sets/manual_v1.jsonl) | 手工编写的多科问答测试集，见下节说明 |
-| [`spec/`](spec/) | 功能设计文档：多策略检索、数据清洗、引用优化 |
+| [`data/test_sets/retrieval_manual_v1.example.jsonl`](data/test_sets/retrieval_manual_v1.example.jsonl) | 检索标注格式示例，含不可回答问题 |
+| [`spec/`](spec/) | 功能设计文档：数据清洗、引用优化 |
 | [`test/`](test/) | 测试代码：多策略检索测试、数据清洗测试 |
 
 ### manual_v1.jsonl
@@ -370,8 +382,10 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 | `LLM_TIMEOUT_SECONDS` / `ENABLE_LLM_FALLBACK` | 3 / True | LLM 参与意图兜底时的超时与开关 |
 | `MULTI_QUERY_VARIANTS` | 4 | 多查询策略生成的变体数量 |
 | `DECOMPOSITION_MAX_SUB` | 4 | 复杂问题拆解的最多子问题数 |
-| `RETRIEVAL_QUALITY_THRESHOLD` | 0.5 | 检索质量最低置信度，低于时触发补充策略 |
-| `HYDE_MIN_SCORE` / `STEP_BACK_MIN_DOCS` | 0.4 / 3 | 触发 HyDE / Step-Back 补充策略的阈值 |
+| `RETRIEVAL_CANDIDATE_TOP_K` / `GENERATION_CONTEXT_TOP_K` | 20 / 5 | 重排前候选数与生成阶段上下文数 |
+| `RERANKER_MODEL` / `RERANKER_DEVICE` | `BAAI/bge-reranker-base` / `cpu` | 本地 CrossEncoder 重排模型与设备 |
+| `RERANKER_RELEVANCE_THRESHOLD` / `RETRIEVAL_ACCEPT_TOP1_THRESHOLD` | 0.50 / 0.60 | 在线门控相关候选与 top-1 接受阈值 |
+| `RETRIEVAL_GATE_MODE` | `enforce` | `enforce` 会拒答，`observe` 仅记录不可用重排器 |
 | `STRATEGY_TIMEOUT` | 10 | 策略 LLM 调用超时（秒） |
 
 ---
@@ -390,7 +404,6 @@ edu-rag/
 │   └── test_sets/
 │       └── manual_v1.jsonl     # 手工问答测试集
 ├── spec/                       # 功能设计文档
-│   ├── multi_strategy_retrieval.md
 │   ├── document_clean.md
 │   └── source_citation_optimization.md
 ├── test/                       # 测试代码
@@ -403,6 +416,8 @@ edu-rag/
 ├── core/
 │   ├── embeddings.py
 │   ├── vectorestore.py         # Milvus + BM25 + RRF
+│   ├── reranker.py             # 本地 CrossEncoder 重排
+│   ├── retrieval_quality.py    # 统一检索门控
 │   ├── graph.py                # LangGraph 编排
 │   ├── stream_queue.py         # 流式输出队列
 │   ├── nodes/
@@ -411,10 +426,9 @@ edu-rag/
 │   │   ├── chitchat.py
 │   │   ├── retriever.py        # 策略驱动的混合检索
 │   │   ├── generator.py
-│   │   ├── evaluator.py        # Corrective RAG 规则评估
 │   │   └── training_collector.py # 分类器训练数据自动收集
 │   └── strategies/             # 多策略检索模块
-│       ├── selector.py         # 策略选择器 + 质量评估
+│       ├── selector.py         # 初始检索策略选择器
 │       ├── multi_query.py      # 多查询变体生成 + RRF 融合
 │       ├── decomposition.py    # 复杂问题拆解 + 子结果合并
 │       ├── hyde.py             # HyDE 假设答案生成
@@ -427,6 +441,7 @@ edu-rag/
 │   └── pipeline.py             # 导入流水线（含文件/SQL 双入口）
 ├── evaluation/
 │   ├── ragas_evaluator.py      # LLM / Embedding / 指标适配
+│   ├── retrieval_evaluator.py  # 检索指标、门控回放与阈值校准
 │   ├── pipeline.py             # run_evaluation / run_live_evaluation / 入库
 │   ├── dataset_builder.py
 │   ├── schemas.py
@@ -452,11 +467,9 @@ edu-rag/
    - `medium` → **MULTI_QUERY**：LLM 生成多个查询变体，多路检索后 RRF 融合
    - `complex` → **DECOMPOSITION**：LLM 将复杂问题拆解为子问题，分别检索后合并去重
 3. **混合检索**：每路查询在稠密向量（Milvus）与 BM25 上并行检索，使用 RRF 合并排序。
-4. **补充策略**：首轮检索后评估质量，若不达标则自动触发补充策略（见 `config.py` 中 `RETRIEVAL_QUALITY_THRESHOLD` 等参数）：
-   - **HyDE**：LLM 生成假设答案，用答案的 embedding 再检索（适合定义/事实类查询）
-   - **Step-Back**：LLM 抽象回退问题，用更一般的概念检索背景知识（适合结果过少时）
-5. **生成**：将召回片段与用户问题、会话历史送至 LLM 生成答复（支持流式输出）。
-6. **纠正（Corrective RAG）**：`evaluator` 节点依据检索相关性、答复长度等规则给出 `accept` / `retry` / `give_up`；为 `retry` 时触发 `re_retrieve`（扩大检索）并再次生成，重试上限由配置约束（参见 `core/graph.py`、`config.MAX_RETRIES`）。
+4. **本地重排**：候选片段经过 CrossEncoder，原始 logit 经 sigmoid 归一化为 `rerank_score`。RRF 仅负责候选排序，不参与质量判断。
+5. **统一门控**：`retrieval_gate` 根据 `rerank_score` 给出 `accept` / `retry` / `abstain`。第一次重试使用原问题和最多三个改写变体；第二次根据失败原因使用 HyDE 或 Step-Back。
+6. **生成或拒答**：只有 `accept` 才会生成答案；重试耗尽后进入固定拒答节点，避免低质量资料被包装成可信答案。
 
 ### 数据清洗流水线
 
@@ -505,7 +518,7 @@ edu-rag/
 
 ### LangGraph 节点拓扑（概要）
 
-常规教育问答路径：`classify` → `select_strategy` → `retrieve` → `generate` → `evaluate` →（`accept`）`finalize` 结束；若为 `retry` 则 `re_retrieve`（含补充策略）→ `generate` → … 直至 `accept` 或达到重试上限后 `finalize`。非教育意图经 `classify` → `chitchat` → `finalize`，不执行向量检索。
+常规教育问答路径：`classify` → `retrieve` → `rerank` → `retrieval_gate`。门控通过后进入 `generate`；需要纠正时进入 `retry_planner` 后回到 `retrieve`；重试耗尽后进入 `abstain`。非教育意图经 `classify` → `chitchat` → `finalize`，不执行向量检索。
 
 实现细节与条件边定义见 **`core/graph.py`**。行为变更以源代码及 **`GET /docs`** 为准。
 
@@ -530,6 +543,6 @@ edu-rag/
 | Faithfulness 等结构化指标失败 | Instructor 输出被 `max_tokens` 截断 | 提高 **`RAGAS_LLM_MAX_TOKENS`** |
 | 控制台与纯 API 表现不一致 | 流式输出经服务层队列推送 | 对照 `services/rag_service.py` 与 `core/stream_queue.py` |
 | 多策略检索耗时过长 | 多查询/分解策略需多次 LLM 调用 | 调整 `MULTI_QUERY_VARIANTS`、`DECOMPOSITION_MAX_SUB` 降低变体数；或增大 `STRATEGY_TIMEOUT` |
-| 补充策略（HyDE/Step-Back）未触发 | 首轮检索质量已达标或阈值过高 | 检查 `RETRIEVAL_QUALITY_THRESHOLD`、`HYDE_MIN_SCORE`、`STEP_BACK_MIN_DOCS` 配置 |
+| HyDE/Step-Back 未触发 | 门控已经接受结果，或尚处于第一次 query variants 重试 | 检查 `retrieval_attempts` 和 `RERANKER_*` / `RETRIEVAL_ACCEPT_TOP1_THRESHOLD` 配置 |
 | 数据清洗丢弃了过多内容 | 去噪规则过于严格（页码/短文本/高频噪声） | 检查 `ingestion/cleaner.py` 中 `Denoiser` 的阈值和模式；观察 `CleanStats.dedup_rate` / `drop_rate` |
 | SQL 导入连接超时 | 数据库不可达或防火墙限制 | 确认 `db_url` 格式正确、网络可达；减小 `batch_size` 降低单次压力 |

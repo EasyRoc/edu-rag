@@ -1120,6 +1120,16 @@ const SESSION_USER_ID = (() => {
   return uid;
 })();
 
+const SESSION_ID = (() => {
+  const key = 'k12_session_id';
+  let sessionId = sessionStorage.getItem(key);
+  if (!sessionId) {
+    sessionId = 'chat_' + crypto.randomUUID();
+    sessionStorage.setItem(key, sessionId);
+  }
+  return sessionId;
+})();
+
 function onInputKeydown(e) {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
@@ -1311,6 +1321,7 @@ async function sendMessage() {
     subject: document.getElementById('qa-subject').value || null,
     grade: document.getElementById('qa-grade').value || null,
     user_id: SESSION_USER_ID,
+    session_id: SESSION_ID,
   }));
 }
 

@@ -1,6 +1,6 @@
 """闲聊节点：调用 LLM 以友好方式回应非教育类查询"""
 
-from core.stream_queue import _registry as _stream_queues
+from core.stream_queue import stream_queues
 from core.nodes.generator import llm_generate_stream
 from utils.logger import logger
 
@@ -17,19 +17,13 @@ async def chitchat_node(state):
     """闲聊节点：调用 LLM 以友好的方式回应非教育类查询"""
     logger.info(f"[节点] chitchat: query='{state['query'][:50]}'")
     queue_id = state.get("_queue_id")
-    stream_queue = _stream_queues.get(queue_id) if queue_id else None
     full_answer = ""
-    try:
-        async for token in llm_generate_stream(
-            query=state["query"],
-            context_docs=[],
-            system_prompt=_CHITCHAT_SYSTEM_PROMPT,
-            conversation_history=state.get("conversation_history", []),
-        ):
-            full_answer += token
-            if stream_queue is not None:
-                await stream_queue.put(token)
-    finally:
-        if stream_queue is not None:
-            await stream_queue.put(None)
+    async for token in llm_generate_stream(
+        query=state["query"],
+        context_docs=[],
+        system_prompt=_CHITCHAT_SYSTEM_PROMPT,
+        conversation_history=state.get("conversation_history", []),
+    ):
+        full_answer += token
+        await stream_queues.emit(queue_id, token)
     return {"answer": full_answer}

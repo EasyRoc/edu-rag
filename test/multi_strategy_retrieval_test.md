@@ -2,14 +2,14 @@
 
 ## 1. 功能概述
 
-在现有混合检索基础上引入5种查询策略，根据意图、复杂度和检索质量自动选择。详见 [spec/multi_strategy_retrieval.md](../spec/multi_strategy_retrieval.md)。
+在现有混合检索基础上保留多种查询策略，并由统一重排门控决定接受、重试或拒答。
 
 ## 2. 测试策略
 
 ### 2.1 单元测试（白盒）
 
 - **策略选择器**：覆盖所有 intent × complexity 组合的 `select_strategy` 逻辑
-- **质量评估**：`assess_retrieval_quality` / `should_apply_hyde` / `should_apply_step_back` 的阈值边界
+- **质量门控**：`evaluate_retrieval_gate` 的接受、重试、拒答和 observe 模式边界
 - **多查询融合**：`multi_query_fusion` RRF 排序正确性、去重、分数归一化、不修改原始数据
 - **子结果合并**：`merge_sub_results` 去重保留最高分逻辑
 - **LLM 响应解析**：变体生成/问题拆解的输出格式解析（编号去除、空行过滤）
@@ -18,8 +18,8 @@
 
 - **DIRECT 策略端到端**：完整 `hybrid_retrieve` 调用（simple 查询），验证不触发额外 LLM 调用
 - **策略降级**：LLM 不可用时 MULTI_QUERY 和 DECOMPOSITION 降级为 DIRECT，不报错
-- **补充策略流程**：低质量检索结果的 Step-Back/HyDE 补充逻辑（mock LLM）
-- **retrieve_node 集成**：策略选择 → 检索 → 评估的完整链路
+- **纠正策略流程**：第一次重试 query variants，第二次根据原因选择 Step-Back 或 HyDE
+- **Graph 集成**：策略选择 → 检索 → 重排 → 门控的完整链路
 
 ## 3. 测试用例
 
@@ -29,12 +29,10 @@
 | U02 | medium 查询选 MULTI_QUERY | intent=educational, complexity=medium | StrategyType.MULTI_QUERY | 基态 |
 | U03 | complex 查询选 DECOMPOSITION | intent=educational, complexity=complex | StrategyType.DECOMPOSITION | 基态 |
 | U04 | 非教育意图一律 DIRECT | intent=chitchat/complexity=complex | StrategyType.DIRECT | 意图分流 |
-| U05 | 高质量结果通过评估 | 3+ docs, avg≥0.5 | assess=True | 阈值边界 |
-| U06 | 低平均分不通过 | avg<0.5 | assess=False | 阈值边界 |
-| U07 | 结果不足不通过 | <3 docs | assess=False | 数量边界 |
-| U08 | 空结果不通过 | [] | assess=False, hyde=True, step_back=True | 空集处理 |
-| U09 | top1<0.4 触发 HyDE | [score=0.3, ...] | hyde=True | HyDE 阈值 |
-| U10 | top1≥0.4 不触发 HyDE | [score=0.9, ...] | hyde=False | HyDE 阈值 |
+| U05 | 高质量结果通过门控 | top1 rerank_score≥0.60 | accept | 阈值边界 |
+| U06 | 低分结果纠正 | top1 rerank_score<0.60 | retry | 阈值边界 |
+| U07 | 空结果纠正 | [] | retry + HyDE 建议 | 空集处理 |
+| U08 | 重试耗尽 | 低质量结果 + retry_count=2 | abstain | 拒答边界 |
 | U11 | 多查询融合排序正确 | 3路含重复chunk | 按RRF降序，去重 | RRF k=60 |
 | U12 | 融合不修改原始数据 | 原始score=0.9 | 融合后原始dict score不变 | 副作用 |
 | U13 | 合并保留最高分 | 同一chunk在两路中score=0.7/0.8 | 保留0.8 | 去重保留最高 |
@@ -43,7 +41,7 @@
 | I01 | DIRECT端到端 | simple查询 + 有数据Milvus | 返回结果，无LLM调用 | 端到端集成 |
 | I02 | LLM不可用时降级 | 无API_KEY + medium查询 | 降级为DIRECT，正常返回结果 | 降级容错 |
 | I03 | retrieve_node策略标记 | educational+medium查询 | 走MULTI_QUERY路径 | 节点集成 |
-| I04 | re_retrieve用直接检索 | 任意查询 | 直接调hybrid_search(top_k=8) | 重试不走策略 |
+| I04 | corrective retry | 低质量首次检索 | 重试回到统一 retrieve → rerank → gate | 无旁路 |
 
 ## 4. 测试环境 & 数据
 

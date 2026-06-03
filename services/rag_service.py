@@ -3,8 +3,10 @@
 import time
 import json
 import asyncio
+import uuid
 from typing import AsyncGenerator, Any
 
+from config import settings
 from core.state import RAGState
 from core.stream_queue import stream_queues
 from core.vectorestore import K12VectorStore
@@ -13,7 +15,7 @@ from utils.logger import logger
 
 
 def format_references(docs: list[dict]) -> list[dict]:
-    """Format retrieved docs into the API-compatible references shape."""
+    """将检索结果格式化为前端兼容的引用结构。"""
     references = []
     for doc in docs:
         reference = {
@@ -23,7 +25,10 @@ def format_references(docs: list[dict]) -> list[dict]:
             "source_file": doc.get("source_file") or doc.get("doc_id") or "未知来源",
             "page": doc.get("page", 0),
             "chapter": doc.get("chapter", ""),
-            "score": round(doc.get("score", 0), 4),
+            "score": round(
+                doc.get("rerank_score", doc.get("fusion_score", doc.get("score", 0))),
+                4,
+            ),
             "subject": doc.get("subject", ""),
             "grade": doc.get("grade", ""),
         }
@@ -39,21 +44,34 @@ class RAGService:
         self.vector_store = vector_store
         self.rag_graph = rag_graph
 
+    @staticmethod
+    def resolve_session_id(session_id: str | None, user_id: str | None) -> str:
+        """优先使用显式会话 ID；旧客户端没有 session_id 时回退到 user_id。"""
+        return session_id or user_id or str(uuid.uuid4())
+
     def _build_initial_state(
-        self, query: str, subject: str | None, grade: str | None, user_id: str | None
+        self,
+        query: str,
+        subject: str | None,
+        grade: str | None,
+        session_id: str,
     ) -> dict:
         return {
             "query": query,
             "subject": subject,
             "grade": grade,
+            "session_id": session_id,
             "intent": "",
             "complexity": "",
             "retrieved_docs": [],
             "answer": "",
-            "evaluation_reason": "",
-            "evaluation_decision": "",
             "retry_count": 0,
-            "max_retries": 2,
+            "max_retries": settings.MAX_RETRIES,
+            "retrieval_plan": {"strategy": "initial", "queries": [query]},
+            "retrieval_attempts": [],
+            "retrieval_metrics": {},
+            "retrieval_decision": {},
+            "abstain_reason": "",
             "_queue_id": "",
         }
 
@@ -63,6 +81,7 @@ class RAGService:
         subject: str | None = None,
         grade: str | None = None,
         user_id: str | None = None,
+        session_id: str | None = None,
         stream: bool = False,
     ) -> dict:
         """
@@ -75,8 +94,10 @@ class RAGService:
         logger.info(f"问题: {query[:100]}")
         logger.info(f"过滤条件: subject={subject}, grade={grade}, user_id={user_id}")
 
-        initial_state = self._build_initial_state(query, subject, grade, user_id)
-        config = {"configurable": {"thread_id": user_id or "default"}}
+        session_id = self.resolve_session_id(session_id, user_id)
+        logger.info("会话解析完成: session_id=%s", session_id)
+        initial_state = self._build_initial_state(query, subject, grade, session_id)
+        config = {"configurable": {"thread_id": session_id}}
 
         try:
             final_state = await self.rag_graph.ainvoke(initial_state, config)
@@ -87,10 +108,16 @@ class RAGService:
                 "references": [],
                 "latency_ms": int((time.time() - start_time) * 1000),
                 "complexity": "",
+                "session_id": session_id,
             }
 
         elapsed = int((time.time() - start_time) * 1000)
-        logger.info(f"RAG 流程完成，耗时: {elapsed}ms")
+        logger.info(
+            "RAG 流程完成: latency_ms=%d, decision=%s, references=%d",
+            elapsed,
+            final_state.get("retrieval_decision", {}).get("action", "n/a"),
+            len(final_state.get("retrieved_docs", [])),
+        )
 
         references = format_references(final_state.get("retrieved_docs", []))
 
@@ -121,6 +148,7 @@ class RAGService:
             "latency_ms": elapsed,
             "complexity": final_state.get("complexity", "medium"),
             "record_id": record_id,
+            "session_id": session_id,
         }
 
     async def ask_stream(
@@ -129,6 +157,7 @@ class RAGService:
         subject: str | None = None,
         grade: str | None = None,
         user_id: str | None = None,
+        session_id: str | None = None,
     ) -> AsyncGenerator[bytes, None]:
         """
         流式 RAG 问答，通过 LangGraph 工作流编排，以 SSE 格式逐事件产出。
@@ -152,9 +181,11 @@ class RAGService:
         # 创建 token 队列，通过全局注册表传递（避免 Queue 直接放入 LangGraph state 导致深拷贝失败）
         queue_id, stream_queue = stream_queues.create()
 
-        initial_state = self._build_initial_state(query, subject, grade, user_id)
+        session_id = self.resolve_session_id(session_id, user_id)
+        logger.info("流式会话解析完成: session_id=%s, queue_id=%s", session_id, queue_id)
+        initial_state = self._build_initial_state(query, subject, grade, session_id)
         initial_state["_queue_id"] = queue_id
-        config = {"configurable": {"thread_id": user_id or "default"}}
+        config = {"configurable": {"thread_id": session_id}}
 
         full_answer = ""
         final_state = {}
@@ -171,6 +202,8 @@ class RAGService:
             except Exception as e:
                 graph_error = e
                 logger.error(f"RAG 后台工作流异常: {e}")
+            finally:
+                await stream_queues.close(queue_id)
 
         # 启动后台 graph 任务
         graph_task = asyncio.create_task(_run_graph())
@@ -242,12 +275,18 @@ class RAGService:
                 logger.warning(f"保存问答记录失败: {e}")
 
         logger.info(f"========== RAG 流式问答结束 (耗时: {elapsed}ms) ==========")
+        if graph_error:
+            yield _sse("error", {
+                "status": "error",
+                "message": "回答生成过程中出现错误，请稍后重试。",
+            })
         yield _sse("done", {
             "answer": final_answer,
             "references": references,
             "latency_ms": elapsed,
             "complexity": final_complexity,
             "record_id": record_id,
+            "session_id": session_id,
         })
 
     async def _save_qa_record(

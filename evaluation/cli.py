@@ -29,6 +29,10 @@ import json
 import sys
 from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from datasets import Dataset
 
 from evaluation.dataset_builder import EvalDatasetBuilder
@@ -202,6 +206,39 @@ def _add_export_parser(subparsers) -> None:
     p.set_defaults(func=_cmd_export)
 
 
+# ===================================================================
+# retrieval-evaluate / retrieval-calibrate 子命令
+# ===================================================================
+def _add_retrieval_parsers(subparsers) -> None:
+    evaluate = subparsers.add_parser("retrieval-evaluate", help="运行检索与门控离线评估")
+    evaluate.add_argument("--from-file", type=str, required=True, help="检索标注集 JSON/JSONL 路径")
+    evaluate.set_defaults(func=_cmd_retrieval_evaluate)
+
+    calibrate = subparsers.add_parser("retrieval-calibrate", help="校准检索门控阈值")
+    calibrate.add_argument("--from-file", type=str, required=True, help="检索标注集 JSON/JSONL 路径")
+    calibrate.add_argument("--max-false-accept-rate", type=float, default=0.05, help="最大错误接受率")
+    calibrate.set_defaults(func=_cmd_retrieval_calibrate)
+
+
+async def _cmd_retrieval_evaluate(args: argparse.Namespace) -> None:
+    from evaluation.retrieval_evaluator import evaluate_retrieval_cases, load_retrieval_cases
+    from main import build_app_state
+
+    cases = load_retrieval_cases(args.from_file)
+    report = await evaluate_retrieval_cases(cases, vector_store=build_app_state().vector_store)
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+
+
+async def _cmd_retrieval_calibrate(args: argparse.Namespace) -> None:
+    from evaluation.retrieval_evaluator import calibrate_thresholds, evaluate_retrieval_cases, load_retrieval_cases
+    from main import build_app_state
+
+    cases = load_retrieval_cases(args.from_file)
+    report = await evaluate_retrieval_cases(cases, vector_store=build_app_state().vector_store)
+    recommendation = calibrate_thresholds(report["cases"], max_false_accept_rate=args.max_false_accept_rate)
+    print(json.dumps(recommendation, ensure_ascii=False, indent=2))
+
+
 async def _cmd_export(args: argparse.Namespace) -> None:
     print(f"从 QA 历史导出测试集: limit={args.limit}, feedback>={args.min_feedback}")
     generator = TestSetGenerator()
@@ -234,13 +271,14 @@ def parse_args() -> argparse.Namespace:
     _add_generate_parser(subparsers)
     _add_validate_parser(subparsers)
     _add_export_parser(subparsers)
+    _add_retrieval_parsers(subparsers)
     return parser.parse_args()
 
 
 async def main():
     args = parse_args()
     if not hasattr(args, "func"):
-        print("请指定子命令: evaluate / generate / validate / export")
+        print("请指定子命令: evaluate / generate / validate / export / retrieval-evaluate / retrieval-calibrate")
         print("示例: python evaluation/cli.py evaluate --from-db --limit 30")
         sys.exit(1)
     if asyncio.iscoroutinefunction(args.func):

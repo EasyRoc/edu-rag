@@ -151,25 +151,25 @@ classify → select_strategy → retrieve → assess_quality → [补充策略] 
 
 ## 五、Corrective RAG：质量评估与纠正
 
-### 流程（`core/graph.py` + `core/nodes/evaluator.py`）
+### 流程（`core/graph.py` + `core/retrieval_quality.py`）
 
 ```
-generate → evaluate → accept → finalize
-                   → retry  → re_retrieve（扩大 top_k=8）→ generate → evaluate...
-                   → give_up → finalize（达到 max_retries=2）
+retrieve → rerank → retrieval_gate → accept  → generate → finalize
+                                  → retry   → retry_planner → retrieve...
+                                  → abstain → finalize（达到 max_retries=2）
 ```
 
-### 评估维度（`evaluator.py:10-55`）
+### 评估维度（`retrieval_quality.py`）
 
 1. 检索结果是否为空
-2. 回答是否非空（≥5 字符）
-3. 检索结果最高分是否 ≥ 0.5
-4. 重试次数 ≤ max_retries (2)
+2. 本地 CrossEncoder 重排器是否可用
+3. top-1 `rerank_score` 是否 ≥ 0.60，且至少一个候选是否 ≥ 0.50
+4. 重试次数是否达到 `max_retries`（默认 2）
 
 ### 面试复盘要点
 
 - 这是一个**基于规则的轻量级评估**，不是 LLM 评估。如果被问为什么不使用 LLM 评估，回答：规则评估速度快（<1ms）、确定性高，适合在线链路；LLM 评估（如 RAGAS 的 Faithfulness）放在离线评估 pipeline 中使用。
-- 重试时扩大了 top_k（从 5→8），但没有触发补充策略（HyDE/Step-Back）——补充策略只在首轮检索的 `retrieve_node` 中触发，不在 `re_retrieve_node` 中。
+- 第一次重试使用 query variants，第二次按失败原因选择 HyDE 或 Step-Back，全部回到统一检索、重排和门控链路。
 
 ---
 
@@ -272,14 +272,13 @@ if len(history) > max_msgs:
 ┌────────────────────────▼───────────────────────────────────┐
 │              LangGraph 工作流 (core/graph.py)               │
 │                                                             │
-│  classify ──→ retrieve ──→ generate ──→ evaluate            │
-│     │            │                          │               │
-│     │       ┌────┴────┐              ┌──────┼──────┐        │
-│     │    DIRECT  MULTI_QUERY         │      │      │        │
-│     │              DECOMPOSITION   accept retry give_up     │
-│     │            + HyDE/Step-Back    │      │      │        │
-│     │                                │  re_retrieve │       │
-│  chitchat ←────────────────────── finalize ←───────┘        │
+│  classify ──→ retrieve ──→ rerank ──→ retrieval_gate        │
+│     │            │                       │                  │
+│     │       ┌────┴────┐          ┌───────┼────────┐         │
+│     │    DIRECT  MULTI_QUERY   accept   retry   abstain      │
+│     │              DECOMPOSITION │       │        │         │
+│     │                             │ retry_planner  │         │
+│  chitchat ←────────────────── finalize ←───────────┘        │
 │     │            │                                          │
 │     └────────────┘                                          │
 └─────────────────────────────────────────────────────────────┘

@@ -1,46 +1,63 @@
+"""K12 RAG 的 LangGraph 编排入口。
+
+图中只保存可序列化状态；向量库、重排器等运行时对象通过闭包注入节点，
+避免被 LangGraph checkpointer 持久化。
+"""
+
+from __future__ import annotations
+
+import time
 from typing import Literal
 
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, StateGraph
+
+from config import settings
 from core.nodes.chitchat import chitchat_node
-from core.nodes.evaluator import evaluate_retrieval
 from core.nodes.generator import llm_generate_stream
-from core.nodes.query_classifier import classify_query, classify_intent_async
-from core.nodes.retriever import hybrid_retrieve
+from core.nodes.query_classifier import classify_intent_async, classify_query
+from core.nodes.retriever import build_retry_plan, hybrid_retrieve
+from core.reranker import CrossEncoderReranker, RerankerUnavailableError
+from core.retrieval_quality import evaluate_retrieval_gate
 from core.state import MAX_ROUNDS, RAGState
 from core.stream_queue import stream_queues
 from core.vectorestore import K12VectorStore
-from core.strategies import generate_query_variants
 from utils.logger import logger
-from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.memory import MemorySaver
 
 
-# ==================== 图节点函数 ====================
+ABSTAIN_ANSWER = "抱歉，我暂时没有检索到足够可靠的资料来回答这个问题。你可以补充教材范围、年级或更具体的问题。"
+
+
 async def finalize_node(state: RAGState) -> dict:
-    """记忆持久化节点：将当前 Q&A 追加到 conversation_history 并裁剪"""
+    """收尾节点：把本轮用户问题与助手回答写入会话历史。"""
     history = list(state.get("conversation_history", []))
-    history.append({"role": "user", "content": state["query"]})
-    history.append({"role": "assistant", "content": state.get("answer", "")})
-    max_msgs = MAX_ROUNDS * 2
-    if len(history) > max_msgs:
-        history = history[-max_msgs:]
-    return {"conversation_history": history}
+    history.extend(
+        [
+            {"role": "user", "content": state["query"]},
+            {"role": "assistant", "content": state.get("answer", "")},
+        ]
+    )
+    trimmed = history[-MAX_ROUNDS * 2 :]
+    logger.debug("finalize: 会话历史裁剪为 %d 条消息", len(trimmed))
+    return {"conversation_history": trimmed}
 
 
 async def classify_node(state: RAGState) -> dict:
-    """查询分类节点：三层意图识别 + 教育类查询复杂度分级"""
-    logger.info(f"[节点] classify: query='{state['query'][:50]}'")
+    """意图与复杂度分类节点。非教育问题直接转闲聊分支。"""
     intent = await classify_intent_async(state["query"])
-    if intent != "educational":
-        logger.info(f"[节点] classify: 非教育类意图 ({intent})，跳过复杂度分级")
-        return {"intent": intent, "complexity": "simple"}
-    complexity = classify_query(state["query"])
+    complexity = classify_query(state["query"]) if intent == "educational" else "simple"
+    logger.info(
+        "classify: intent=%s, complexity=%s, query=%s",
+        intent,
+        complexity,
+        state["query"][:50],
+    )
     return {"intent": intent, "complexity": complexity}
 
 
-async def retrieve_node(state: RAGState) -> dict:
-    """混合检索节点（策略驱动）"""
-    logger.info(f"[节点] retrieve: complexity={state['complexity']}")
-    vector_store: K12VectorStore = state.get("_vector_store")
+async def retrieve_node(state: RAGState, vector_store: K12VectorStore) -> dict:
+    """候选召回节点：只负责召回，不在这里做质量判断。"""
+    started = time.perf_counter()
     docs = await hybrid_retrieve(
         vector_store=vector_store,
         query=state["query"],
@@ -48,143 +65,171 @@ async def retrieve_node(state: RAGState) -> dict:
         intent=state.get("intent", "educational"),
         subject=state.get("subject"),
         grade=state.get("grade"),
+        retrieval_plan=state.get("retrieval_plan"),
+        candidate_top_k=settings.RETRIEVAL_CANDIDATE_TOP_K,
     )
-    return {"retrieved_docs": docs}
-
-
-async def generate_node(state: RAGState) -> dict:
-    """LLM 生成节点：调用 LLM 生成回答，同时通过全局队列推送 token 实现流式"""
-    logger.info(f"[节点] generate: retry_count={state.get('retry_count', 0)}")
-    queue_id = state.get("_queue_id")
-    stream_queue = stream_queues.get(queue_id)
-    full_answer = ""
-    try:
-        async for token in llm_generate_stream(
-            query=state["query"],
-            context_docs=state.get("retrieved_docs", []),
-            conversation_history=state.get("conversation_history", []),
-        ):
-            full_answer += token
-            if stream_queue is not None:
-                await stream_queue.put(token)
-    finally:
-        if stream_queue is not None:
-            await stream_queue.put(None)
-
-    logger.info(f"[节点] generate: 完成，共 {len(full_answer)} 字")
-    return {"answer": full_answer}
-
-
-async def evaluate_node(state: RAGState) -> dict:
-    """检索质量评估节点：在检索后、生成前评估文档质量"""
-    logger.info(f"[节点] evaluate: retry_count={state.get('retry_count', 0)}")
-    decision, reason = evaluate_retrieval(
-        retrieved_docs=state.get("retrieved_docs", []),
-        retry_count=state.get("retry_count", 0),
-        max_retries=state.get("max_retries", 2),
-    )
-    return {"evaluation_reason": reason, "evaluation_decision": decision}
-
-
-async def re_retrieve_node(state: RAGState) -> dict:
-    """重新检索节点：改写 query 后扩大检索范围"""
-    retry = state.get("retry_count", 0) + 1
-    logger.info(f"[节点] re_retrieve: 第 {retry} 次重试，query 改写中...")
-    vector_store: K12VectorStore = state.get("_vector_store")
-    # Query rewrite：生成变体取最优，改写失败则用原 query
-    variants = await generate_query_variants(state["query"])
-    rewritten = variants[0] if variants else state["query"]
-    if rewritten != state["query"]:
-        logger.info(f"[节点] re_retrieve: query 改写 '{state['query'][:30]}...' → '{rewritten[:30]}...'")
-    docs = vector_store.hybrid_search(
-        query=rewritten,
-        subject=state.get("subject"),
-        grade=state.get("grade"),
-        top_k=8,
+    latency_ms = round((time.perf_counter() - started) * 1000, 3)
+    logger.info(
+        "retrieve: plan=%s, candidates=%d, latency_ms=%.3f",
+        state.get("retrieval_plan", {}).get("strategy", "initial"),
+        len(docs),
+        latency_ms,
     )
     return {
         "retrieved_docs": docs,
-        "retry_count": retry,
+        "retrieval_latency_ms": latency_ms,
     }
 
 
-# ==================== 图构建 ====================
-def should_continue(state: RAGState) -> Literal["accept", "retry", "give_up"]:
-    """条件边：根据检索质量评估结果决定流程走向"""
-    decision = state.get("evaluation_decision", "give_up")
-    if decision == "accept":
-        logger.info("[条件边] 检索质量合格 -> 生成回答")
-        return "accept"
-    elif decision == "retry":
-        logger.info(f"[条件边] 检索质量不足 -> 改写 query 重新检索 (第 {state.get('retry_count', 0) + 1} 次)")
-        return "retry"
-    else:
-        logger.info("[条件边] 检索放弃 -> 降级生成（无检索上下文）")
-        return "give_up"
+async def rerank_node(state: RAGState, reranker: CrossEncoderReranker) -> dict:
+    """本地 CrossEncoder 重排节点。失败时交给门控决定是否拒答或观察放行。"""
+    started = time.perf_counter()
+    try:
+        docs = await reranker.rerank(state["query"], state.get("retrieved_docs", []))
+        available = True
+    except RerankerUnavailableError as exc:
+        logger.warning("本地重排不可用: %s", exc)
+        docs = list(state.get("retrieved_docs", []))
+        available = False
+    latency_ms = round((time.perf_counter() - started) * 1000, 3)
+    logger.info(
+        "rerank: available=%s, docs=%d, top1=%.4f, latency_ms=%.3f",
+        available,
+        len(docs),
+        docs[0].get("rerank_score", 0.0) if docs else 0.0,
+        latency_ms,
+    )
+    return {
+        "retrieved_docs": docs,
+        "reranker_available": available,
+        "rerank_latency_ms": latency_ms,
+    }
 
 
-def build_rag_graph(vector_store: K12VectorStore):
-    """
-    构建 RAG 流程的 LangGraph。
+async def retrieval_gate_node(state: RAGState) -> dict:
+    """统一检索门控节点：根据重排分数决定生成、重试或拒答。"""
+    decision = evaluate_retrieval_gate(
+        state.get("retrieved_docs", []),
+        retry_count=state.get("retry_count", 0),
+        max_retries=state.get("max_retries", settings.MAX_RETRIES),
+        reranker_available=state.get("reranker_available", False),
+    )
+    attempt = {
+        "retry_count": state.get("retry_count", 0),
+        "plan": state.get("retrieval_plan", {}),
+        "candidate_count": len(state.get("retrieved_docs", [])),
+        "metrics": decision["metrics"],
+        "decision": decision["action"],
+        "reason_codes": decision["reason_codes"],
+        "retrieval_latency_ms": state.get("retrieval_latency_ms", 0.0),
+        "rerank_latency_ms": state.get("rerank_latency_ms", 0.0),
+    }
+    logger.info(
+        "retrieval_gate: action=%s, reasons=%s, retry=%d/%d, metrics=%s",
+        decision["action"],
+        ",".join(decision["reason_codes"]),
+        state.get("retry_count", 0),
+        state.get("max_retries", settings.MAX_RETRIES),
+        decision["metrics"],
+    )
+    return {
+        "retrieval_metrics": decision["metrics"],
+        "retrieval_decision": decision,
+        "retrieval_attempts": [*state.get("retrieval_attempts", []), attempt],
+    }
 
-    Args:
-        vector_store: 向量存储实例
 
-    Returns:
-        编译后的 LangGraph 应用
-    """
-    logger.info("正在构建 LangGraph RAG 工作流...")
+async def retry_planner_node(state: RAGState) -> dict:
+    """纠正检索规划节点：根据门控原因选择下一轮检索策略。"""
+    next_retry = state.get("retry_count", 0) + 1
+    plan = await build_retry_plan(
+        query=state["query"],
+        next_retry_count=next_retry,
+        decision=state.get("retrieval_decision", {}),
+    )
+    logger.info("retry_planner: retry=%d, plan=%s", next_retry, plan)
+    return {"retry_count": next_retry, "retrieval_plan": plan}
 
-    # 注入 vector_store（通过闭包方式绑定）
+
+async def generate_node(state: RAGState) -> dict:
+    """答案生成节点。只有门控通过的上下文才会进入这里。"""
+    full_answer = ""
+    queue_id = state.get("_queue_id")
+    docs = state.get("retrieved_docs", [])[: settings.GENERATION_CONTEXT_TOP_K]
+    async for token in llm_generate_stream(
+        query=state["query"],
+        context_docs=docs,
+        conversation_history=state.get("conversation_history", []),
+    ):
+        full_answer += token
+        await stream_queues.emit(queue_id, token)
+    logger.info("generate: context_docs=%d, answer_chars=%d", len(docs), len(full_answer))
+    return {"answer": full_answer, "retrieved_docs": docs}
+
+
+async def abstain_node(state: RAGState) -> dict:
+    """拒答节点：低置信检索不进入 LLM 生成，避免把弱证据包装成答案。"""
+    decision = state.get("retrieval_decision", {})
+    logger.info("abstain: reasons=%s", ",".join(decision.get("reason_codes", [])))
+    return {
+        "answer": ABSTAIN_ANSWER,
+        "retrieved_docs": [],
+        "abstain_reason": ",".join(decision.get("reason_codes", [])),
+    }
+
+
+def _route_by_gate(state: RAGState) -> Literal["accept", "retry", "abstain"]:
+    """条件边：读取门控节点的结构化动作。"""
+    return state.get("retrieval_decision", {}).get("action", "abstain")
+
+
+def build_rag_graph(
+    vector_store: K12VectorStore,
+    reranker: CrossEncoderReranker | None = None,
+    *,
+    checkpointer=None,
+):
+    """构建 RAG 图，并通过闭包注入不可序列化的运行时依赖。"""
+    reranker = reranker or CrossEncoderReranker()
+    logger.info(
+        "构建 RAG Graph: candidate_top_k=%d, context_top_k=%d, max_retries=%d",
+        settings.RETRIEVAL_CANDIDATE_TOP_K,
+        settings.GENERATION_CONTEXT_TOP_K,
+        settings.MAX_RETRIES,
+    )
+
     async def retrieve_with_store(state: RAGState) -> dict:
-        state["_vector_store"] = vector_store
-        return await retrieve_node(state)
+        return await retrieve_node(state, vector_store)
 
-    async def re_retrieve_with_store(state: RAGState) -> dict:
-        state["_vector_store"] = vector_store
-        return await re_retrieve_node(state)
+    async def rerank_with_model(state: RAGState) -> dict:
+        return await rerank_node(state, reranker)
 
-    # 构建图
     workflow = StateGraph(RAGState)
-
-    # 添加节点
     workflow.add_node("classify", classify_node)
     workflow.add_node("retrieve", retrieve_with_store)
+    workflow.add_node("rerank", rerank_with_model)
+    workflow.add_node("retrieval_gate", retrieval_gate_node)
+    workflow.add_node("retry_planner", retry_planner_node)
     workflow.add_node("generate", generate_node)
-    workflow.add_node("evaluate", evaluate_node)
-    workflow.add_node("re_retrieve", re_retrieve_with_store)
+    workflow.add_node("abstain", abstain_node)
     workflow.add_node("chitchat", chitchat_node)
     workflow.add_node("finalize", finalize_node)
-
-    # 设置入口
     workflow.set_entry_point("classify")
-
-    # 条件边：根据意图分流
-    #   - educational → 继续 RAG 管线（检索 → 生成 → 评估）
-    #   - 其它 → 闲聊回复
-    def route_by_intent(state: RAGState) -> Literal["retrieve", "chitchat"]:
-        return "retrieve" if state.get("intent") == "educational" else "chitchat"
-
-    workflow.add_conditional_edges("classify", route_by_intent, {
-        "retrieve": "retrieve",
-        "chitchat": "chitchat",
-    })
-    workflow.add_edge("chitchat", "finalize")
-    # CRAG 流程: retrieve → evaluate → {accept: generate, retry: re_retrieve, give_up: generate}
-    workflow.add_edge("retrieve", "evaluate")
     workflow.add_conditional_edges(
-        "evaluate",
-        should_continue,
-        {
-            "accept": "generate",
-            "retry": "re_retrieve",
-            "give_up": "generate",
-        },
+        "classify",
+        lambda state: "retrieve" if state.get("intent") == "educational" else "chitchat",
+        {"retrieve": "retrieve", "chitchat": "chitchat"},
     )
-    workflow.add_edge("re_retrieve", "evaluate")  # 重新检索后回到评估
+    workflow.add_edge("retrieve", "rerank")
+    workflow.add_edge("rerank", "retrieval_gate")
+    workflow.add_conditional_edges(
+        "retrieval_gate",
+        _route_by_gate,
+        {"accept": "generate", "retry": "retry_planner", "abstain": "abstain"},
+    )
+    workflow.add_edge("retry_planner", "retrieve")
     workflow.add_edge("generate", "finalize")
+    workflow.add_edge("abstain", "finalize")
+    workflow.add_edge("chitchat", "finalize")
     workflow.add_edge("finalize", END)
-
-    app = workflow.compile(checkpointer=MemorySaver())
-    logger.info("LangGraph RAG 工作流构建完成")
-    return app
+    return workflow.compile(checkpointer=MemorySaver() if checkpointer is None else checkpointer)

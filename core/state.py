@@ -12,13 +12,20 @@ class RAGState(TypedDict):
     query: str
     subject: str | None
     grade: str | None
+    session_id: str
     intent: str
     complexity: str
     retrieved_docs: list
     answer: str
-    evaluation_reason: str
-    evaluation_decision: str
     retry_count: int
     max_retries: int
     conversation_history: list[dict]
+    retrieval_plan: dict
+    retrieval_attempts: list[dict]
+    retrieval_metrics: dict
+    retrieval_decision: dict
+    abstain_reason: str
+    retrieval_latency_ms: float
+    rerank_latency_ms: float
+    reranker_available: bool
     _queue_id: str

@@ -95,9 +95,10 @@
 │   │  LangGraph 工作流（graph.py）            │   │
 │   │   ├── classify    Adaptive RAG 分类节点 │   │
 │   │   ├── retrieve    混合检索节点          │   │
-│   │   ├── generate    LLM 生成节点          │   │
-│   │   ├── evaluate    质量评估节点          │   │
-│   │   └── re_retrieve Corrective 重试节点   │   │
+│   │   ├── rerank      CrossEncoder 重排    │   │
+│   │   ├── retrieval_gate 统一门控          │   │
+│   │   ├── retry_planner Corrective 重试    │   │
+│   │   └── generate    LLM 生成节点          │   │
 │   └──────────────────────────────────────────┘   │
 ├──────────────────────────────────────────────────┤
 │  数据层                                           │
@@ -110,7 +111,7 @@
 
 ### 4.2 两条核心数据流
 - **写链路**：用户上传文档 → 加载 → 切片 → 向量化 → Milvus 入库 + BM25 重建 → 更新文档状态
-- **读链路**：用户提问 → LangGraph 编排（分类 → 混合检索 → LLM 生成 → 评估 →（可能重试）→ 返回）
+- **读链路**：用户提问 → LangGraph 编排（分类 → 混合检索 → 重排 → 门控 → 生成或拒答 → 返回）
 
 > 讲解时务必画出这两张图，能显著加分。
 
@@ -165,22 +166,22 @@
                       │
                       ▼
                ┌─────────────┐
-               │  generate   │  ← qwen-plus
+               │   rerank    │  ← CrossEncoder
                └──────┬──────┘
                       │
                       ▼
                ┌─────────────┐
-               │  evaluate   │  ← Corrective RAG
+               │retrieval_gate│ ← Corrective RAG
                └──────┬──────┘
           ┌──────────┴──────────┐
-        accept              retry  give_up
+        accept              retry  abstain
           │                    │      │
           ▼                    ▼      ▼
          END           ┌─────────────┐ END
-                       │ re_retrieve │
+                       │retry_planner│
                        └──────┬──────┘
                               │
-                              └──→ generate (循环)
+                              └──→ retrieve (循环)
 ```
 
 ### 6.2 全局状态（RAGState TypedDict）
@@ -193,7 +194,8 @@ class RAGState(TypedDict):
     complexity: str               # simple / medium / complex
     retrieved_docs: list          # 检索结果
     answer: str                   # 回答
-    evaluation_reason: str        # 评估结论
+    retrieval_decision: dict      # accept / retry / abstain
+    retrieval_attempts: list      # 每轮策略、指标、耗时与原因码
     retry_count: int              # 重试次数
     max_retries: int              # 最大重试（默认 2）
 ```
@@ -201,13 +203,13 @@ class RAGState(TypedDict):
 ### 6.3 单次完整调用流程
 
 1. **classify_node**：规则匹配"是什么/公式"等关键词 → `simple`；"比较/分析/为什么"等 → `complex`；否则 `medium`
-2. **retrieve_node**：按复杂度映射 `top_k = {simple:3, medium:5, complex:8}`，调用 `vector_store.hybrid_search`
-3. **generate_node**：组装 `[1] ... [2] ...` 格式的上下文，用 System Prompt 约束"只能基于参考资料回答"，异步 httpx 调用 qwen-plus
-4. **evaluate_node**：三维度评估——有无检索结果、回答是否过短、最高相关性得分是否 ≥ 0.4
-5. **条件边 should_continue**：
-   - `accept` → END（返回结果 + references）
-   - `retry` 且未超限 → `re_retrieve`（top_k 升到 8）→ 重新 generate → 再 evaluate
-   - `give_up` → END（返回"未找到相关信息"兜底）
+2. **retrieve_node**：按复杂度选择 DIRECT / MULTI_QUERY / DECOMPOSITION，召回候选
+3. **rerank_node**：本地 CrossEncoder 重排，logit 经 sigmoid 归一化为 `rerank_score`
+4. **retrieval_gate_node**：只根据重排结果给出 `accept` / `retry` / `abstain`
+5. **条件边**：
+   - `accept` → `generate` → END
+   - `retry` 且未超限 → `retry_planner` → `retrieve`
+   - `abstain` → 固定拒答 → END
 
 ---
 
@@ -353,26 +355,17 @@ _COMPLEX_KEYWORDS = ["比较", "对比", "分析", "为什么", "推导", "证�
 
 **灵感**：来自 [CRAG 论文](https://arxiv.org/abs/2401.15884)。传统 RAG 是"一锤子买卖"——检索差就答得差。Corrective RAG 加入反馈闭环。
 
-**本项目实现**（`core/nodes/evaluator.py`）：
+**本项目实现**（`core/retrieval_quality.py`）：
 
 ```python
-def evaluate_quality(query, answer, retrieved_docs, retry_count, max_retries=2):
-    # 1. 没检索到 → give_up
-    if not retrieved_docs: return "give_up", "未检索到相关文档"
-
-    # 2. 回答太短/为空 → retry（未超限）或 give_up
-    if not answer or len(answer.strip()) < 5:
-        return "retry" if retry_count < max_retries else "give_up", ...
-
-    # 3. 最高相关性得分 < 0.4 → retry
-    max_score = max(doc.get("score", 0) for doc in retrieved_docs)
-    if max_score < 0.4 and retry_count < max_retries:
-        return "retry", f"检索相关性不足 (max_score={max_score:.3f})"
-
-    return "accept", "回答质量合格"
+def evaluate_retrieval_gate(docs, retry_count, max_retries=2):
+    # 1. 无候选：重试或拒答
+    # 2. 重排器不可用：enforce 模式拒答
+    # 3. top1 >= 0.60 且存在 score >= 0.50 的候选：接受
+    # 4. 其它情况：重试或拒答
 ```
 
-**重试策略**（`core/graph.py` 的 `re_retrieve_node`）：**把复杂度强制提到 complex，把 top_k 升到 8**，扩大检索范围再生成。
+**重试策略**：第一次使用原问题和最多三个去重改写；第二次根据门控原因选择 HyDE 或 Step-Back。每次都会重新经过 `retrieve → rerank → retrieval_gate`。
 
 最多重试 2 次，避免死循环浪费 token。
 
@@ -389,9 +382,8 @@ def evaluate_quality(query, answer, retrieved_docs, retry_count, max_retries=2):
 | LangGraph | **有向图 + 条件边 + 全局 State + 内置 checkpointer**，天然适合 RAG 这种"有循环纠错"的流程 |
 
 **本项目图结构**：
-- 节点 5 个：classify / retrieve / generate / evaluate / re_retrieve
-- 边 4 条普通边 + 1 条条件边（`should_continue`）
-- 循环：`re_retrieve → generate → evaluate` 可回到 evaluate 再判断
+- 教育问答主节点：classify / retrieve / rerank / retrieval_gate / retry_planner / generate / abstain / finalize
+- 循环：`retry_planner → retrieve → rerank → retrieval_gate`
 
 **State 的闭包注入技巧**（代码实战点）：
 
@@ -399,8 +391,7 @@ def evaluate_quality(query, answer, retrieved_docs, retry_count, max_retries=2):
 # vector_store 不适合放在 State 里（不可序列化、冗余）
 # 所以用闭包包一层，把 store 注入到节点函数
 async def retrieve_with_store(state: RAGState) -> dict:
-    state["_vector_store"] = vector_store
-    return await retrieve_node(state)
+    return await retrieve_node(state, vector_store)
 ```
 
 ### 7.5 SSE 流式输出

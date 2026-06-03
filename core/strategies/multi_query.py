@@ -55,7 +55,11 @@ def multi_query_fusion(all_results: list[list[dict]], top_k: int, rrf_k: int = 6
             chunk_key = doc.get("id", 0)
             score_map[chunk_key] += 1.0 / (rrf_k + rank + 1)
             if chunk_key not in doc_map:
-                doc_map[chunk_key] = doc
+                doc_map[chunk_key] = dict(doc)
+            else:
+                for key, value in doc.items():
+                    if key.endswith("_raw_score"):
+                        doc_map[chunk_key][key] = value
 
     # 按 RRF 得分排序
     scored = [(score_map[chunk_key], doc_map[chunk_key]) for chunk_key in doc_map]
@@ -66,7 +70,9 @@ def multi_query_fusion(all_results: list[list[dict]], top_k: int, rrf_k: int = 6
     results = []
     for score, doc in scored[:top_k]:
         doc = dict(doc)
-        doc["score"] = round(score / max_score, 4)
+        fusion_score = round(score / max_score, 4)
+        doc["fusion_score"] = fusion_score
+        doc["score"] = fusion_score
         results.append(doc)
 
     logger.info(f"多查询融合: {len(all_results)} 路结果 → {len(results)} 条")

@@ -1,0 +1,3 @@
+{"id":"math-example-001","question":"一元二次方程如何求根？","subject":"数学","grade":"九年级","complexity":"simple","answerable":true,"relevant_chunk_ids":[101,102],"tags":["algebra","replace_chunk_ids_after_ingestion"]}
+{"id":"unanswerable-example-001","question":"请根据教材说明火星城市公交卡如何充值。","subject":"数学","grade":"九年级","complexity":"simple","answerable":false,"relevant_chunk_ids":[],"tags":["unanswerable"]}
+{"id":"unanswerable-example-002","question":"教材中是否规定了下周学校食堂的菜单？","subject":"语文","grade":"七年级","complexity":"simple","answerable":false,"relevant_chunk_ids":[],"tags":["unanswerable"]}

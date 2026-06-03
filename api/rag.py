@@ -28,6 +28,7 @@ async def ask_question(req: AskRequest, request: Request):
             subject=req.subject,
             grade=req.grade,
             user_id=req.user_id,
+            session_id=req.session_id,
             stream=req.stream,
         )
 
@@ -36,6 +37,8 @@ async def ask_question(req: AskRequest, request: Request):
             "references": result["references"],
             "latency_ms": result["latency_ms"],
             "complexity": result.get("complexity", "medium"),
+            "record_id": result.get("record_id"),
+            "session_id": result["session_id"],
         })
 
     except Exception as e:
@@ -50,17 +53,20 @@ async def ask_question_stream(req: AskRequest, request: Request):
 
     logger.info(f"收到流式问答请求: query='{req.query[:50]}', subject={req.subject}, grade={req.grade}")
 
+    session_id = rag_service.resolve_session_id(req.session_id, req.user_id)
     return StreamingResponse(
         rag_service.ask_stream(
             query=req.query,
             subject=req.subject,
             grade=req.grade,
             user_id=req.user_id,
+            session_id=session_id,
         ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
+            "X-Session-ID": session_id,
         },
     )
 

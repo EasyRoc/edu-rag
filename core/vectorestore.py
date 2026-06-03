@@ -233,6 +233,8 @@ class K12VectorStore:
                 "id": hit["id"],
                 "text": hit["entity"]["chunk_text"],
                 "score": sim,
+                "dense_raw_score": sim,
+                "fusion_score": sim,
                 "doc_id": hit["entity"].get("doc_id", ""),
                 "subject": hit["entity"].get("subject", ""),
                 "grade": hit["entity"].get("grade", ""),
@@ -278,6 +280,8 @@ class K12VectorStore:
                 "id": doc.get("id", 0),
                 "text": doc.get("chunk_text", ""),
                 "score": float(scores[idx]),
+                "sparse_raw_score": float(scores[idx]),
+                "fusion_score": float(scores[idx]),
                 "doc_id": doc.get("doc_id", ""),
                 "subject": doc.get("subject", ""),
                 "grade": doc.get("grade", ""),
@@ -297,26 +301,22 @@ class K12VectorStore:
 
         k = settings.RRF_K
         score_map = defaultdict(float)
+        doc_map: dict[int, dict] = {}
 
         for rank, doc in enumerate(dense_results):
-            doc_id = doc["id"]
+            doc_id = int(doc["id"])
             score_map[doc_id] += 1.0 / (k + rank + 1)
-            score_map[f"_{doc_id}_data"] = doc
+            doc_map[doc_id] = dict(doc)
 
         for rank, doc in enumerate(sparse_results):
-            doc_id = doc["id"]
+            doc_id = int(doc["id"])
             score_map[doc_id] += 1.0 / (k + rank + 1)
-            if f"_{doc_id}_data" not in score_map:
-                score_map[f"_{doc_id}_data"] = doc
+            current = doc_map.setdefault(doc_id, dict(doc))
+            for key, value in doc.items():
+                if key.endswith("_raw_score"):
+                    current[key] = value
 
-        # 按融合得分排序
-        scored_docs = []
-        for doc_id in score_map:
-            if isinstance(doc_id, int) or (isinstance(doc_id, str) and doc_id.isdigit()):
-                doc_id_num = int(doc_id)
-                doc_data = score_map.get(f"_{doc_id_num}_data", {})
-                if doc_data:
-                    scored_docs.append((score_map[doc_id_num], doc_data))
+        scored_docs = [(score_map[doc_id], doc) for doc_id, doc in doc_map.items()]
 
         scored_docs.sort(key=lambda x: x[0], reverse=True)
 
@@ -325,7 +325,9 @@ class K12VectorStore:
         results = []
         for score, doc in scored_docs[:top_k]:
             result_doc = dict(doc)
-            result_doc["score"] = round(score / max_score, 4)
+            fusion_score = round(score / max_score, 4)
+            result_doc["fusion_score"] = fusion_score
+            result_doc["score"] = fusion_score
             results.append(result_doc)
 
         return results

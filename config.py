@@ -50,17 +50,25 @@ class Settings:
     SPARSE_WEIGHT: float = 0.3    # 稀疏检索权重
     # 稠密检索（Milvus COSINE）：返回值为余弦相似度，越大越相似；低于此值的结果丢弃。0 表示不按阈值过滤。
     DENSE_MIN_SIMILARITY: float = float(os.getenv("DENSE_MIN_SIMILARITY", "0.0"))
+    RETRIEVAL_CANDIDATE_TOP_K: int = int(os.getenv("RETRIEVAL_CANDIDATE_TOP_K", "20"))
+    GENERATION_CONTEXT_TOP_K: int = int(os.getenv("GENERATION_CONTEXT_TOP_K", "5"))
+
+    # ---------- 本地重排与检索门控 ----------
+    ENABLE_RERANKER: bool = os.getenv("ENABLE_RERANKER", "true").lower() in {"1", "true", "yes", "on"}
+    RERANKER_MODEL: str = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-base")
+    RERANKER_DEVICE: str = os.getenv("RERANKER_DEVICE", "cpu")
+    RERANKER_BATCH_SIZE: int = int(os.getenv("RERANKER_BATCH_SIZE", "16"))
+    RERANKER_RELEVANCE_THRESHOLD: float = float(os.getenv("RERANKER_RELEVANCE_THRESHOLD", "0.50"))
+    RETRIEVAL_ACCEPT_TOP1_THRESHOLD: float = float(os.getenv("RETRIEVAL_ACCEPT_TOP1_THRESHOLD", "0.60"))
+    RETRIEVAL_GATE_MODE: str = os.getenv("RETRIEVAL_GATE_MODE", "enforce")
 
     # ---------- 多策略检索 ----------
     MULTI_QUERY_VARIANTS: int = int(os.getenv("MULTI_QUERY_VARIANTS", "4"))       # 多查询生成的变体数量
     DECOMPOSITION_MAX_SUB: int = int(os.getenv("DECOMPOSITION_MAX_SUB", "4"))     # 复杂问题最多拆解的子问题数
-    RETRIEVAL_QUALITY_THRESHOLD: float = float(os.getenv("RETRIEVAL_QUALITY_THRESHOLD", "0.5"))  # 检索质量最低置信度
-    HYDE_MIN_SCORE: float = float(os.getenv("HYDE_MIN_SCORE", "0.4"))             # 触发 HyDE 的最低分
-    STEP_BACK_MIN_DOCS: int = int(os.getenv("STEP_BACK_MIN_DOCS", "3"))           # 触发 Step-Back 的最少结果数
     STRATEGY_TIMEOUT: float = float(os.getenv("STRATEGY_TIMEOUT", "10"))           # 策略 LLM 调用超时(秒)
 
     # ---------- 纠正重试 ----------
-    MAX_RETRIES: int = 2           # Corrective RAG 最大重试次数
+    MAX_RETRIES: int = max(0, min(2, int(os.getenv("MAX_RETRIES", "2"))))  # Corrective RAG 最大重试次数
 
     # ---------- Milvus 集合名称 ----------
     MILVUS_COLLECTION: str = "k12_knowledge_base"

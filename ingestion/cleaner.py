@@ -161,6 +161,7 @@ class StructureRepairer:
     _MD_CODE = re.compile(r'`([^`]+)`')
     _MD_LIST = re.compile(r'^[\s]*[-*+]\s+', re.MULTILINE)
     _MD_HR = re.compile(r'^[-*_]{3,}\s*$', re.MULTILINE)
+    _MD_HEADER = re.compile(r'^\s*#{1,6}\s+', re.MULTILINE)
 
     def repair(self, text: str, source_type: str = "") -> str:
         if not text:
@@ -179,9 +180,10 @@ class StructureRepairer:
         return text
 
     def _repair_markdown(self, text: str) -> str:
-        """Markdown：去除格式符号，保留标题标记（供下游分片使用）"""
+        """Markdown：去除格式符号，保留可读文本。"""
         text = self._MD_HR.sub('', text)
         text = self._MD_LIST.sub('', text)
+        text = self._MD_HEADER.sub('', text)
         # 链接：保留文本
         text = self._MD_LINK.sub(r'\1', text)
         # 加粗/斜体：保留内容
