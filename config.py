@@ -18,6 +18,10 @@ class Settings:
     LLM_API_KEY: str = os.getenv("LLM_API_KEY", "")
     LLM_BASE_URL: str = os.getenv("LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
     LLM_MODEL: str = os.getenv("LLM_MODEL", "qwen-plus")
+    # 模型上下文窗口上限（token 数），用于自动裁剪超长历史消息。
+    # 默认 8192 是保守值，实际模型如 deepseek-v4-flash / qwen-plus 支持 128K+，
+    # 可按模型实际窗口设置：LLM_MAX_CONTEXT_TOKENS=131072
+    LLM_MAX_CONTEXT_TOKENS: int = int(os.getenv("LLM_MAX_CONTEXT_TOKENS", "8192"))
 
     # RAGAS / Instructor 结构化输出默认仅 1024 completion tokens，
     # faithfulness、context_* 等指标在长回答上易被截断，可通过环境变量提高上限。

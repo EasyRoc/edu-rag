@@ -135,8 +135,34 @@ async def build_retry_plan(
     next_retry_count: int,
     decision: dict,
 ) -> dict:
-    """根据门控失败原因规划下一轮纠正检索。"""
+    """根据门控失败原因规划下一轮纠正检索。
+
+    渐进式重试 —— 第一次盲扩，后面对症下药：
+
+    初始检索失败（策略由 select_strategy 按复杂度选择）
+        │
+        ▼
+    【重试1 — query_variants】盲扩
+        原因：还不知道为什么失败，先换几种问法试试覆盖面
+        手段：生成3个同义改写变体，原始 query + 变体多路同时检索后 RRF 融合
+        │
+        ├── 成了 → 放行
+        │
+        └── 又败了 → 门控已经诊断出原因
+                        │
+                        ▼
+                  【重试2 — 对症下药】
+
+                  relevant_count == 0  → hyde
+                    所有文档都不相关，说明查询词和知识库的表达方式不匹配
+                    → 生成假设答案，用答案文本去检索（答案用词更贴近知识库）
+
+                  top1_score 低       → step_back
+                    有文档但质量不够，说明查询太窄或太具体
+                    → 回溯到更宽泛的概念（浮力公式推导 → 浮力原理）
+    """
     if next_retry_count == 1:
+        # 第一次重试：盲扩——还不知道失败原因，用多查询变体扩大覆盖面
         variants = await generate_query_variants(query, n=3)
         queries = []
         for item in [query, *variants]:
@@ -145,6 +171,7 @@ async def build_retry_plan(
         plan = {"strategy": "query_variants", "queries": queries[:4]}
         logger.info("生成第一次纠正检索计划: %s", plan)
         return plan
+    # 第二次及以后：已有门控诊断，按病因选择 hyde 或 step_back
     strategy = decision.get("suggested_strategy") or "step_back"
     plan = {"strategy": strategy, "queries": [query]}
     logger.info("生成后续纠正检索计划: %s", plan)

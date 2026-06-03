@@ -1,11 +1,84 @@
 """生成节点：基于检索结果，调用 LLM 生成回答"""
+from __future__ import annotations
+
 from typing import AsyncGenerator
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
 from config import settings
 from core.llm import get_chat_model
 from utils.logger import logger
+
+# token 计数器：优先用 tiktoken，不可用时回退到字符估算
+try:
+    import tiktoken
+
+    _enc = tiktoken.get_encoding("cl100k_base")
+
+    def _count_tokens(text: str) -> int:
+        return len(_enc.encode(text))
+except Exception:
+    def _count_tokens(text: str) -> int:
+        # 中英文混合估算：中文 ~1.5 char/token，英文 ~4 char/token
+        # 取粗略平均 2.5 char/token
+        return max(1, len(text) // 2)
+
+
+def _trim_messages(messages: list[BaseMessage], max_tokens: int) -> list[BaseMessage]:
+    """裁剪消息列表到 max_tokens 以内，保留 system 消息和最近的对话。
+
+    规则：
+    - SystemMessage（首条）始终保留，因为包含参考资料和系统指令
+    - 从旧到新丢弃中间的 history 消息，保证最新的消息不丢
+    - 最坏情况只保留 system + 当前 query（最后一条 HumanMessage）
+    """
+    if not messages:
+        return messages
+
+    sys_msg = messages[0]
+    # 分离首条 system 消息和后续消息
+    body = messages[1:] if isinstance(sys_msg, SystemMessage) else messages
+    system = [sys_msg] if isinstance(sys_msg, SystemMessage) else []
+
+    # 固定开销：system prompt + 当前 query（最后一条）+ 预留响应 token
+    fixed = _count_tokens(sys_msg.content if system else "")
+    last = messages[-1]  # 当前 query
+    fixed += _count_tokens(last.content if hasattr(last, "content") else str(last))
+    reserve = settings.LLM_API_KEY and 2048 + int(max_tokens * 0.05) or 0  # max_tokens + 5% 余量
+    budget = max_tokens - fixed - reserve
+
+    if budget <= 0:
+        # 连 system + query 都快撑满了，只能保留最小集
+        logger.warning(
+            "上下文窗口紧张: max=%d, fixed=%d, 丢弃全部历史消息",
+            max_tokens, fixed,
+        )
+        return system + [last]
+
+    # 从旧到新丢弃 body 消息，直到剩余消息落在 budget 内
+    total = sum(_count_tokens(m.content if hasattr(m, "content") else str(m)) for m in body)
+    if total <= budget:
+        return messages  # 没超，原样返回
+
+    for cutoff in range(0, len(body) - 1):
+        candidate = body[cutoff:]
+        candidate_tokens = sum(
+            _count_tokens(m.content if hasattr(m, "content") else str(m)) for m in candidate
+        )
+        if candidate_tokens <= budget:
+            trimmed_count = cutoff
+            logger.info(
+                "上下文窗口裁剪: max=%d, fixed=%d, budget=%d, 裁剪历史 %d 条消息",
+                max_tokens, fixed, budget, trimmed_count,
+            )
+            return system + candidate
+
+    # 全丢了也装不下，只保留 system + 当前 query
+    logger.warning(
+        "上下文窗口不足: max=%d, fixed=%d, 丢弃全部 %d 条历史消息",
+        max_tokens, fixed, len(body),
+    )
+    return system + [last]
 
 # 系统 Prompt 模板 —— 约束 LLM 仅基于检索内容回答
 SYSTEM_PROMPT_TEMPLATE = """你是一个专业的 K12 教育助手，名叫"知学助手"。
@@ -100,6 +173,10 @@ async def llm_generate_stream(
                 messages.append(AIMessage(content=content))
 
     messages.append(HumanMessage(content=query))
+
+    # 上下文窗口裁剪：历史消息过长时从旧到新丢弃，保证不超出模型上限
+    max_context = settings.LLM_MAX_CONTEXT_TOKENS
+    messages = _trim_messages(messages, max_context)
 
     logger.info(f"流式调用 LLM: model={settings.LLM_MODEL}, context_docs={len(context_docs)}")
 

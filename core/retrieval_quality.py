@@ -166,8 +166,8 @@ def evaluate_retrieval_gate(
         }
 
     # ── 分支 3: 质量达标，直接放行 ──
-    # 条件：top1 超过绝对置信阈值，且至少有一条文档被认定为相关
-    if metrics["top1_score"] >= top1_min and metrics["relevant_count"] >= 1:
+    # top1_min（0.60）> relevant_min（0.50），所以 top1 >= 0.60 时 relevant_count 必然 >= 1
+    if metrics["top1_score"] >= top1_min:
         logger.info(
             "检索门控: action=accept, top1=%.4f, relevant_count=%d",
             metrics["top1_score"],
