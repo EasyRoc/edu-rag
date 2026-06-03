@@ -96,12 +96,13 @@ async def init_database():
 
 def register_routers(app: FastAPI) -> None:
     """注册 API 路由"""
-    from api import analytics, documents, evaluation, knowledge, rag
+    from api import documents, evaluation, rag
+    # from api import analytics, knowledge  # 暂未开发完成，先隐藏
 
     app.include_router(rag.router)
     app.include_router(documents.router)
-    app.include_router(knowledge.router)
-    app.include_router(analytics.router)
+    # app.include_router(knowledge.router)   # 知识点模块暂未完成
+    # app.include_router(analytics.router)   # 学情分析模块暂未完成
     app.include_router(evaluation.router)
     logger.info("API 路由注册完成")
 

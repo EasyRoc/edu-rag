@@ -1,6 +1,6 @@
 # Edu-RAG：K12 教育知识库问答系统
 
-Edu-RAG 是一个面向 K12 教材、教辅和校本资料的本地 RAG 系统。它使用 **FastAPI** 提供 REST/SSE 接口，使用 **LangGraph** 编排问答流程，使用 **Milvus Lite + BM25 + RRF** 做混合召回，并通过 **CrossEncoder 重排 + 检索门控** 控制答案生成质量。项目还包含文档入库、SQL 导入、学情分析、知识点管理、RAGAS 答案评估和独立检索评估。
+Edu-RAG 是一个面向 K12 教材、教辅和校本资料的本地 RAG 系统。它使用 **FastAPI** 提供 REST/SSE 接口，使用 **LangGraph** 编排问答流程，使用 **Milvus Lite + BM25 + RRF** 做混合召回，并通过 **CrossEncoder 重排 + 检索门控** 控制答案生成质量。项目还包含文档入库、SQL 导入、RAGAS 答案评估和独立检索评估。
 
 当前应用版本：`1.0.0`，见 [main.py](main.py)。
 
@@ -109,8 +109,10 @@ python main.py
 | 低质量拒答 | 检索证据不足时不进入 LLM 生成，返回固定拒答提示 |
 | 文档管理 | 上传 PDF / Markdown / TXT，列表查询，删除文档和对应向量 |
 | SQL 导入 | 后端连接关系型数据库，流式读取、清洗、切片、入库 |
+<!-- 暂未开发完成
 | 学情分析 | 基于 QA 历史提供薄弱点、历史记录、推荐接口 |
 | 知识点管理 | 提供知识点树、创建和删除接口 |
+-->
 | 评估 | RAGAS 答案质量评估 + 独立检索评估与门控阈值校准 |
 | 本地管理 | `./edu-rag` 封装 help/setup/start/stop/restart/upload-samples 等常用操作 |
 
@@ -244,12 +246,14 @@ SQLSourceAdapter
 | `POST` | `/api/v1/documents/import/sql` | 从 SQL 数据源导入 |
 | `GET` | `/api/v1/documents/list` | 文档列表 |
 | `DELETE` | `/api/v1/documents/{doc_id}` | 删除文档和对应向量 |
+<!-- 暂未开发完成
 | `GET` | `/api/v1/knowledge-points/tree` | 知识点树 |
 | `POST` | `/api/v1/knowledge-points/` | 创建知识点 |
 | `DELETE` | `/api/v1/knowledge-points/{kp_id}` | 删除知识点 |
 | `GET` | `/api/v1/analytics/weak-points/{user_id}` | 薄弱点分析 |
 | `GET` | `/api/v1/analytics/history/{user_id}` | QA 历史 |
 | `GET` | `/api/v1/analytics/recommend/{user_id}` | 推荐复习内容 |
+-->
 | `POST` | `/api/v1/evaluation/from-history` | 从历史 QA 运行 RAGAS 评估 |
 | `POST` | `/api/v1/evaluation/from-content` | 上传或粘贴测试集并实时评估 |
 | `POST` | `/api/v1/evaluation/from-file` | 从服务器本地测试集文件评估 |
@@ -392,7 +396,7 @@ SQLite 主要表：
 | 表 | 说明 |
 |----|------|
 | `documents` | 文档元数据、入库状态、切片数量 |
-| `knowledge_points` | 知识点层级树 |
+<!-- `knowledge_points` 暂未开发完成 -->
 | `qa_records` | 问答历史、引用、反馈、延迟 |
 | `evaluation_records` | RAGAS 评估记录 |
 
@@ -442,13 +446,13 @@ edu-rag/
 │   ├── rag.py                      # 问答、SSE、反馈
 │   ├── documents.py                # 上传、SQL导入、列表、删除
 │   ├── evaluation.py               # RAGAS API
-│   ├── analytics.py                # 学情接口
-│   └── knowledge.py                # 知识点接口
+<!--   ├── analytics.py                # 学情接口（暂未开发完成）-->
+<!--   └── knowledge.py                # 知识点接口（暂未开发完成）-->
 ├── services/                       # 应用服务层
 │   ├── rag_service.py              # 会话、Graph 调用、SSE、QA记录
 │   ├── document_service.py         # 文档保存、入库、删除
-│   ├── analytics_service.py        # 学情分析
-│   └── knowledge_service.py        # 知识点管理
+<!--   ├── analytics_service.py        # 学情分析（暂未开发完成）-->
+<!--   └── knowledge_service.py        # 知识点管理（暂未开发完成）-->
 ├── core/                           # RAG 核心
 │   ├── graph.py                    # LangGraph 编排
 │   ├── vectorestore.py             # Milvus + BM25 + RRF
