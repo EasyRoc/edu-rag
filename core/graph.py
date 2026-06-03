@@ -54,7 +54,6 @@ async def classify_node(state: RAGState) -> dict:
     )
     return {"intent": intent, "complexity": complexity}
 
-
 async def retrieve_node(state: RAGState, vector_store: K12VectorStore) -> dict:
     """候选召回节点：只负责召回，不在这里做质量判断。"""
     started = time.perf_counter()
