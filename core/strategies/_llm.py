@@ -1,6 +1,9 @@
 """策略模块共享的 LLM 调用工具"""
-import httpx
+
+from langchain_core.messages import HumanMessage, SystemMessage
+
 from config import settings
+from core.llm import get_chat_model
 from utils.logger import logger
 
 
@@ -10,34 +13,16 @@ async def llm_complete(system_prompt: str, user_prompt: str, timeout: float = 10
         logger.warning("未配置 LLM_API_KEY，策略 LLM 调用不可用")
         return ""
 
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt},
-    ]
-
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                f"{settings.LLM_BASE_URL}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.LLM_API_KEY}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": settings.LLM_MODEL,
-                    "messages": messages,
-                    "temperature": 0.3,
-                    "max_tokens": 1024,
-                },
-            )
-            response.raise_for_status()
-            result = response.json()
-            content = result["choices"][0]["message"]["content"]
-            logger.debug(f"策略 LLM 返回: {content[:100]}...")
-            return content
-    except httpx.HTTPStatusError as e:
-        logger.error(f"策略 LLM API 错误: {e.response.status_code}")
-        return ""
+        llm = get_chat_model(temperature=0.3, max_tokens=1024, timeout=timeout)
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=user_prompt),
+        ]
+        response = await llm.ainvoke(messages)
+        content = response.content
+        logger.debug(f"策略 LLM 返回: {content[:100]}...")
+        return content
     except Exception as e:
         logger.error(f"策略 LLM 调用异常: {e}")
         return ""

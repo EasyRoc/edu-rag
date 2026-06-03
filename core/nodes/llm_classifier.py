@@ -1,10 +1,13 @@
 """LLM 意图分类器：关键词未命中时的兜底分类。"""
 
-import time
-import httpx
 import json
+import re
+import time
+
+from langchain_core.messages import HumanMessage
 
 from config import settings
+from core.llm import get_chat_model
 from utils.logger import logger
 
 CLASSIFY_PROMPT = """将以下用户查询分类到指定的意图类别中。
@@ -36,40 +39,30 @@ async def llm_classify(query: str) -> dict:
         }
 
     try:
-        async with httpx.AsyncClient(timeout=settings.LLM_TIMEOUT_SECONDS) as client:
-            response = await client.post(
-                f"{settings.LLM_BASE_URL}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.LLM_API_KEY}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": settings.LLM_MODEL,
-                    "messages": [
-                        {"role": "user", "content": CLASSIFY_PROMPT.format(query=query)},
-                    ],
-                    "temperature": 0.0,
-                    "max_tokens": 128,
-                },
-            )
-            response.raise_for_status()
-            raw = response.json()["choices"][0]["message"]["content"].strip()
-            elapsed_ms = (time.perf_counter() - start) * 1000
+        llm = get_chat_model(
+            temperature=0.0,
+            max_tokens=128,
+            timeout=settings.LLM_TIMEOUT_SECONDS,
+        )
+        response = await llm.ainvoke([
+            HumanMessage(content=CLASSIFY_PROMPT.format(query=query)),
+        ])
+        raw = response.content.strip()
+        elapsed_ms = (time.perf_counter() - start) * 1000
 
-            # 解析 LLM 返回的 JSON
-            result = _parse_llm_response(raw)
-            logger.info(
-                f"LLM 分类: intent={result['intent']}, "
-                f"confidence={result['confidence']:.3f}, time={elapsed_ms:.1f}ms"
-            )
-            return {
-                "intent": result["intent"],
-                "confidence": result["confidence"],
-                "source": "llm",
-                "processing_time_ms": round(elapsed_ms, 2),
-            }
+        result = _parse_llm_response(raw)
+        logger.info(
+            f"LLM 分类: intent={result['intent']}, "
+            f"confidence={result['confidence']:.3f}, time={elapsed_ms:.1f}ms"
+        )
+        return {
+            "intent": result["intent"],
+            "confidence": result["confidence"],
+            "source": "llm",
+            "processing_time_ms": round(elapsed_ms, 2),
+        }
 
-    except (httpx.TimeoutException, httpx.HTTPError) as e:
+    except Exception as e:
         elapsed_ms = (time.perf_counter() - start) * 1000
         logger.warning(f"LLM 分类超时或异常，返回 other: {e}")
         return {
@@ -82,7 +75,6 @@ async def llm_classify(query: str) -> dict:
 
 def _parse_llm_response(raw: str) -> dict:
     """解析 LLM 返回的分类结果"""
-    # 尝试直接解析 JSON
     try:
         data = json.loads(raw)
         intent = data.get("intent", "other")
@@ -91,8 +83,6 @@ def _parse_llm_response(raw: str) -> dict:
     except json.JSONDecodeError:
         pass
 
-    # 尝试从文本中提取 JSON 块
-    import re
     match = re.search(r'\{[^}]+\}', raw)
     if match:
         try:
@@ -104,7 +94,6 @@ def _parse_llm_response(raw: str) -> dict:
         except (json.JSONDecodeError, ValueError):
             pass
 
-    # 最低效匹配：检查 raw 中是否包含意图类别名
     for intent in ["educational", "chitchat", "technical", "command", "greeting"]:
         if intent in raw.lower():
             return {"intent": intent, "confidence": 0.6}

@@ -1,10 +1,10 @@
 """生成节点：基于检索结果，调用 LLM 生成回答"""
 from typing import AsyncGenerator
 
-import httpx
-import json
+from langchain_core.messages import HumanMessage, SystemMessage
 
-from config import Settings, settings
+from config import settings
+from core.llm import get_chat_model
 from utils.logger import logger
 
 # 系统 Prompt 模板 —— 约束 LLM 仅基于检索内容回答
@@ -25,56 +25,40 @@ SYSTEM_PROMPT_TEMPLATE = """你是一个专业的 K12 教育助手，名叫"知�
 {query}
 """
 
-async def llm_generate(query: str, context_docs: list[dict]) -> str:
 
+async def llm_generate(query: str, context_docs: list[dict]) -> str:
     """
     调用 LLM 生成回答。
 
-    使用 httpx 调用兼容 OpenAI API 的服务（如 GPT-4o、Claude、DeepSeek 等）。
+    使用 ChatOpenAI 调用兼容 OpenAI API 的服务（如 GPT-4o、Claude、DeepSeek 等）。
     可配置通过 LLM_BASE_URL 切换到任意兼容服务。
     """
     if not settings.LLM_API_KEY:
         logger.warning("未配置 LLM_API_KEY，使用模拟回答模式")
         return _mock_answer(query, context_docs)
-    # 组装上下文
+
     context_parts = []
     for i, doc in enumerate(context_docs):
         context_parts.append(f"[{i+1}] {doc['text']}")
     context = "\n\n".join(context_parts)
+
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT_TEMPLATE.format(context=context, query=query)},
-        {"role": "user", "content": query},
+        SystemMessage(content=SYSTEM_PROMPT_TEMPLATE.format(context=context, query=query)),
+        HumanMessage(content=query),
     ]
+
     logger.info(f"调用 LLM: model={settings.LLM_MODEL}, context_docs={len(context_docs)}")
-    logger.debug(f"Prompt 长度: {sum(len(m['content']) for m in messages)} 字符")
+    logger.debug(f"Prompt 长度: {sum(len(m.content) for m in messages)} 字符")
 
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                f"{settings.LLM_BASE_URL}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.LLM_API_KEY}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": settings.LLM_MODEL,
-                    "messages": messages,
-                    "temperature": 0.3,
-                    "max_tokens": 2048,
-                },
-            )
-            response.raise_for_status()
-            result = response.json()
-            answer = result["choices"][0]["message"]["content"]
-            logger.info(f"LLM 回答生成完成，长度: {len(answer)} 字符")
-            return answer
-    except httpx.HTTPStatusError as e:
-        logger.error(f"LLM API 返回错误: {e.response.status_code} {e.response.text[:200]}")
-        return _mock_answer(query, context_docs)
+        llm = get_chat_model(temperature=0.3, max_tokens=2048, timeout=60.0)
+        response = await llm.ainvoke(messages)
+        answer = response.content
+        logger.info(f"LLM 回答生成完成，长度: {len(answer)} 字符")
+        return answer
     except Exception as e:
         logger.error(f"LLM 调用异常: {e}")
         return _mock_answer(query, context_docs)
-
 
 
 async def llm_generate_stream(
@@ -94,69 +78,40 @@ async def llm_generate_stream(
         yield _mock_answer(query, context_docs)
         return
 
-    # 构建 messages 列表
     if system_prompt:
-        messages = [{"role": "system", "content": system_prompt}]
+        messages = [SystemMessage(content=system_prompt)]
     else:
         context_parts = []
         for i, doc in enumerate(context_docs):
             context_parts.append(f"[{i+1}] {doc['text']}")
         context = "\n\n".join(context_parts)
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT_TEMPLATE.format(context=context, query=query)},
+            SystemMessage(content=SYSTEM_PROMPT_TEMPLATE.format(context=context, query=query)),
         ]
 
-    # 注入对话历史（在 system prompt 之后，当前 query 之前）
     if conversation_history:
-        messages.extend(conversation_history)
+        for msg in conversation_history:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            if role == "user":
+                messages.append(HumanMessage(content=content))
+            elif role == "assistant":
+                from langchain_core.messages import AIMessage
+                messages.append(AIMessage(content=content))
 
-    # 当前问题
-    messages.append({"role": "user", "content": query})
+    messages.append(HumanMessage(content=query))
 
     logger.info(f"流式调用 LLM: model={settings.LLM_MODEL}, context_docs={len(context_docs)}")
 
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            async with client.stream(
-                "POST",
-                f"{settings.LLM_BASE_URL}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.LLM_API_KEY}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": settings.LLM_MODEL,
-                    "messages": messages,
-                    "temperature": 0.3,
-                    "max_tokens": 2048,
-                    "stream": True,
-                },
-            ) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if not line.startswith("data: "):
-                        continue
-                    payload = line[6:]
-                    if payload == "[DONE]":
-                        break
-                    try:
-                        chunk = json.loads(payload)
-                        delta = chunk.get("choices", [{}])[0].get("delta", {})
-                        content = delta.get("content", "")
-                        if content:
-                            yield content
-                    except json.JSONDecodeError:
-                        continue
-
-    except httpx.HTTPStatusError as e:
-        logger.error(f"LLM API 流式调用返回错误: {e.response.status_code}")
-        yield f"\n[LLM API 错误: {e.response.status_code}]"
-        yield _mock_answer(query, context_docs)
+        llm = get_chat_model(temperature=0.3, max_tokens=2048, timeout=120.0)
+        async for chunk in llm.astream(messages):
+            if chunk.content:
+                yield chunk.content
     except Exception as e:
         logger.error(f"LLM 流式调用异常: {e}")
         yield f"\n[LLM 调用异常: {e}]"
         yield _mock_answer(query, context_docs)
-
 
 
 def _mock_answer(query: str, context_docs: list[dict]) -> str:

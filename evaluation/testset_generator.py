@@ -10,17 +10,17 @@ from __future__ import annotations
 
 import json
 import re
-import time
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
-import httpx
+from langchain_core.messages import HumanMessage, SystemMessage
+from sqlalchemy import select
 
 from config import settings
+from core.llm import get_chat_model
 from core.vectorestore import K12VectorStore
 from models.db_models import QARecord, get_session_maker
-from sqlalchemy import select
 from utils.logger import logger
 
 # ---------------------------------------------------------------------------
@@ -78,11 +78,6 @@ GEN_GROUND_TRUTH_PROMPT = """根据以下问答记录，为该问题撰写一份
 
 class TestSetGenerator:
     """LLM 辅助测试集生成器"""
-
-    def __init__(self):
-        self._api_key = settings.LLM_API_KEY
-        self._base_url = settings.LLM_BASE_URL.rstrip("/")
-        self._model = settings.LLM_MODEL
 
     # ------------------------------------------------------------------
     # 方式 B：从向量库文档生成
@@ -300,31 +295,22 @@ class TestSetGenerator:
     # ------------------------------------------------------------------
     # 内部：LLM 调用
     # ------------------------------------------------------------------
-    async def _call_llm(self, prompt: str) -> str:
+    @staticmethod
+    async def _call_llm(prompt: str) -> str:
         """调用 LLM（非流式）"""
-        if not self._api_key:
+        if not settings.LLM_API_KEY:
             raise RuntimeError("未配置 LLM_API_KEY")
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            resp = await client.post(
-                f"{self._base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self._api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": self._model,
-                    "messages": [
-                        {"role": "system", "content": "你是一个专业的 K12 教育评估专家。"},
-                        {"role": "user", "content": prompt},
-                    ],
-                    "temperature": 0.7,
-                    "max_tokens": 2048,
-                },
-            )
-            resp.raise_for_status()
-            result = resp.json()
-            return result["choices"][0]["message"]["content"]
+        try:
+            llm = get_chat_model(temperature=0.7, max_tokens=2048, timeout=120.0)
+            messages = [
+                SystemMessage(content="你是一个专业的 K12 教育评估专家。"),
+                HumanMessage(content=prompt),
+            ]
+            response = await llm.ainvoke(messages)
+            return response.content
+        except Exception as e:
+            raise RuntimeError(f"LLM 调用失败: {e}") from e
 
     # ------------------------------------------------------------------
     # 内部：解析 LLM JSON 响应
