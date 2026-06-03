@@ -15,7 +15,7 @@ from langgraph.graph import END, StateGraph
 from config import settings
 from core.nodes.chitchat import chitchat_node
 from core.nodes.generator import llm_generate_stream
-from core.nodes.query_classifier import classify_intent_async, classify_query
+from core.nodes.query_classifier import classify_intent_async, classify_query_with_fallback
 from core.nodes.retriever import build_retry_plan, hybrid_retrieve
 from core.reranker import CrossEncoderReranker, RerankerUnavailableError
 from core.retrieval_quality import evaluate_retrieval_gate
@@ -45,7 +45,7 @@ async def finalize_node(state: RAGState) -> dict:
 async def classify_node(state: RAGState) -> dict:
     """意图与复杂度分类节点。非教育问题直接转闲聊分支。"""
     intent = await classify_intent_async(state["query"])
-    complexity = classify_query(state["query"]) if intent == "educational" else "simple"
+    complexity = await classify_query_with_fallback(state["query"]) if intent == "educational" else "simple"
     logger.info(
         "classify: intent=%s, complexity=%s, query=%s",
         intent,

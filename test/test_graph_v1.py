@@ -78,7 +78,7 @@ class GraphRoutingTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch("core.graph.classify_intent_async", new=AsyncMock(return_value="educational")),
-            patch("core.graph.classify_query", return_value="simple"),
+            patch("core.graph.classify_query_with_fallback", new=AsyncMock(return_value="simple")),
             patch("core.graph.llm_generate_stream", new=fake_generate),
         ):
             final_state = await graph.ainvoke(_initial_state(max_retries=0))
@@ -95,7 +95,7 @@ class GraphRoutingTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch("core.graph.classify_intent_async", new=AsyncMock(return_value="educational")),
-            patch("core.graph.classify_query", return_value="simple"),
+            patch("core.graph.classify_query_with_fallback", new=AsyncMock(return_value="simple")),
             patch("core.graph.llm_generate_stream", new=generator),
         ):
             final_state = await graph.ainvoke(_initial_state(max_retries=0))
@@ -118,7 +118,7 @@ class GraphRoutingTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch("core.graph.classify_intent_async", new=AsyncMock(return_value="educational")),
-            patch("core.graph.classify_query", return_value="simple"),
+            patch("core.graph.classify_query_with_fallback", new=AsyncMock(return_value="simple")),
             patch("core.graph.llm_generate_stream", new=fake_generate),
             patch(
                 "core.nodes.retriever.generate_query_variants",
