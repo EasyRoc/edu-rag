@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="520" viewBox="0 0 1120 520" role="img" aria-labelledby="title desc">
+  <title id="title">Edu-RAG LangGraph 流程图</title>
+  <desc id="desc">展示当前 RAG Graph 从分类、检索、重排、门控到生成、拒答和重试的完整节点流转。</desc>
+  <defs>
+    <style>
+      .bg { fill: #fbfdff; }
+      .node { fill: #ffffff; stroke: #64748b; stroke-width: 1.4; rx: 10; }
+      .blue { fill: #e0f2fe; stroke: #0284c7; }
+      .green { fill: #dcfce7; stroke: #16a34a; }
+      .amber { fill: #fef3c7; stroke: #d97706; }
+      .red { fill: #fee2e2; stroke: #dc2626; }
+      .purple { fill: #ede9fe; stroke: #7c3aed; }
+      .title { font: 700 16px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; fill: #0f172a; }
+      .text { font: 13px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; fill: #334155; }
+      .small { font: 12px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; fill: #64748b; }
+      .edge { stroke: #334155; stroke-width: 1.8; fill: none; marker-end: url(#arrow); }
+      .retry { stroke: #d97706; stroke-width: 2; fill: none; marker-end: url(#arrow-amber); stroke-dasharray: 7 5; }
+      .label { font: 12px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; fill: #0f172a; }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/>
+    </marker>
+    <marker id="arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#d97706"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1120" height="520"/>
+
+  <rect class="node blue" x="42" y="190" width="126" height="74"/>
+  <text class="title" x="72" y="218">classify</text>
+  <text class="small" x="61" y="241">意图 + 复杂度</text>
+
+  <rect class="node" x="240" y="64" width="126" height="74"/>
+  <text class="title" x="277" y="92">chitchat</text>
+  <text class="small" x="262" y="115">非教育问题</text>
+
+  <rect class="node green" x="240" y="190" width="126" height="74"/>
+  <text class="title" x="278" y="218">retrieve</text>
+  <text class="small" x="257" y="241">混合召回候选</text>
+
+  <rect class="node green" x="432" y="190" width="126" height="74"/>
+  <text class="title" x="466" y="218">rerank</text>
+  <text class="small" x="446" y="241">CrossEncoder</text>
+
+  <rect class="node amber" x="624" y="178" width="146" height="98"/>
+  <text class="title" x="642" y="211">retrieval_gate</text>
+  <text class="small" x="641" y="235">只读 rerank_score</text>
+  <text class="small" x="649" y="253">accept / retry / abstain</text>
+
+  <rect class="node green" x="842" y="64" width="126" height="74"/>
+  <text class="title" x="872" y="92">generate</text>
+  <text class="small" x="854" y="115">门控通过才生成</text>
+
+  <rect class="node red" x="842" y="190" width="126" height="74"/>
+  <text class="title" x="878" y="218">abstain</text>
+  <text class="small" x="858" y="241">低质量证据拒答</text>
+
+  <rect class="node amber" x="842" y="336" width="126" height="86"/>
+  <text class="title" x="862" y="365">retry_planner</text>
+  <text class="small" x="859" y="389">query variants</text>
+  <text class="small" x="872" y="405">HyDE / Step-Back</text>
+
+  <rect class="node purple" x="1008" y="190" width="86" height="74"/>
+  <text class="title" x="1025" y="218">finalize</text>
+  <text class="small" x="1026" y="241">会话历史</text>
+
+  <path class="edge" d="M 168 227 L 240 227"/>
+  <text class="label" x="184" y="214">educational</text>
+  <path class="edge" d="M 105 190 C 118 106 163 101 240 101"/>
+  <text class="label" x="135" y="112">non-educational</text>
+  <path class="edge" d="M 366 227 L 432 227"/>
+  <path class="edge" d="M 558 227 L 624 227"/>
+  <path class="edge" d="M 770 205 C 804 139 824 101 842 101"/>
+  <text class="label" x="785" y="142">accept</text>
+  <path class="edge" d="M 770 227 L 842 227"/>
+  <text class="label" x="788" y="216">abstain</text>
+  <path class="retry" d="M 697 276 C 700 371 775 379 842 379"/>
+  <text class="label" x="722" y="364">retry</text>
+  <path class="retry" d="M 842 379 C 565 474 297 403 303 264"/>
+  <text class="label" x="526" y="438">统一回到 retrieve，不走旁路</text>
+  <path class="edge" d="M 968 101 C 1000 101 1017 145 1039 190"/>
+  <path class="edge" d="M 968 227 L 1008 227"/>
+  <path class="edge" d="M 366 101 C 698 101 736 227 1008 227"/>
+
+  <rect class="node" x="42" y="336" width="260" height="116"/>
+  <text class="title" x="62" y="365">门控规则摘要</text>
+  <text class="text" x="62" y="392">top1 ≥ 0.60 且有候选 ≥ 0.50 → accept</text>
+  <text class="text" x="62" y="416">无候选 / 低分 / 重排不可用 → retry 或 abstain</text>
+  <text class="text" x="62" y="440">RRF 只做候选排序，不做质量判断</text>
+
+  <rect class="node" x="352" y="336" width="260" height="116"/>
+  <text class="title" x="372" y="365">重试策略</text>
+  <text class="text" x="372" y="392">第 1 次：原问题 + 去重 query variants</text>
+  <text class="text" x="372" y="416">第 2 次：按原因选择 HyDE 或 Step-Back</text>
+  <text class="text" x="372" y="440">MAX_RETRIES 默认限制在 0..2</text>
+</svg>

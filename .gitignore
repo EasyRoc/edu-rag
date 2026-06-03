@@ -24,6 +24,7 @@ __pycache__/
 # 日志文件
 *.log
 logs/
+.run/
 
 # 数据库文件
 *.db
