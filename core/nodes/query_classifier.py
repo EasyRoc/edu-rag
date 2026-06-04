@@ -94,7 +94,7 @@ COMPLEXITY_PROMPT = """分析以下教育类查询的复杂度，分为三级：
 async def classify_query_llm(query: str) -> ComplexityResult:
     """LLM 兜底复杂度分类，带结构化输出（含理由）。"""
     llm = get_chat_model(temperature=0.0, max_tokens=256, timeout=10.0)
-    structured = llm.with_structured_output(ComplexityResult)
+    structured = llm.with_structured_output(ComplexityResult, method="json_mode")
     return await structured.ainvoke([
         HumanMessage(content=COMPLEXITY_PROMPT.format(query=query)),
     ])

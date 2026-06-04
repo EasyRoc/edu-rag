@@ -1335,6 +1335,12 @@ function showRefs(msgIdx) {
   const list = document.getElementById('refs-list');
   const count = document.getElementById('refs-count');
 
+  // 同一条消息点击展开/收起切换
+  if (panel.classList.contains('open') && panel.dataset.msgIdx === String(msgIdx)) {
+    panel.classList.remove('open');
+    return;
+  }
+
   count.textContent = `📚 参考来源 (${msg.references.length})`;
 
   list.innerHTML = msg.references.map(ref => {
@@ -1360,6 +1366,7 @@ function showRefs(msgIdx) {
     </div>`;
   }).join('');
 
+  panel.dataset.msgIdx = String(msgIdx);
   panel.classList.add('open');
 }
 

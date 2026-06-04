@@ -131,7 +131,7 @@ def _split_markdown(docs: list[Document]) -> list[Document]:
     chunks = []
     for doc in docs:
         if doc.metadata.get("file_type") == "md":
-            sub_chunks = md_splitter.split_documents([doc])
+            sub_chunks = md_splitter.split_text(doc.page_content)
         else:
             sub_chunks = recursive.split_documents([doc])
         for chunk in sub_chunks:
