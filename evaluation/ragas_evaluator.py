@@ -3,8 +3,8 @@
 支持指标：
   - faithfulness: 回答是否忠实于检索上下文（需 LLM）
   - answer_relevancy: 回答与问题的相关性（需 LLM + Embedding）
-  - context_precision: 检索上下文是否包含无关信息（需 LLM）
-  - context_recall: 检索上下文是否覆盖答案所需信息（需 LLM + ground_truth）
+  - context_precision: 检索上下文是否包含无关信息（需 LLM + reference/ground_truth）
+  - context_recall: 检索上下文是否覆盖答案所需信息（需 LLM + reference/ground_truth）
 
 用法:
     evaluator = RAGASEvaluator()
@@ -26,6 +26,16 @@ from evaluation.schemas import EvalResult, EvalSample
 from utils.logger import logger
 
 logger = logging.getLogger(__name__)
+
+
+REFERENCE_REQUIRED_METRICS = {"context_precision", "context_recall"}
+REFERENCE_FREE_DEFAULT_METRICS = ["faithfulness", "answer_relevancy"]
+REFERENCE_DEFAULT_METRICS = [
+    "faithfulness",
+    "answer_relevancy",
+    "context_precision",
+    "context_recall",
+]
 
 
 class _LangChainStyleEmbeddingsAdapter:
@@ -75,6 +85,44 @@ def _build_ragas_metrics(
         else:
             logger.warning("未知指标: %s，已跳过", name)
     return result
+
+
+def _prepare_dataset_and_metric_names(
+    dataset: Dataset,
+    metrics: list[str] | None = None,
+) -> tuple[Dataset, list[str]]:
+    """按当前 RAGAS 版本要求准备 Dataset，并过滤不兼容指标。
+
+    RAGAS 0.4.x 的 ``context_precision`` / ``context_recall`` 需要 ``reference`` 列。
+    项目历史测试集使用 ``ground_truth``，这里统一镜像为 ``reference``；
+    自动问答样本没有人工标准答案，因此会跳过依赖 ``reference`` 的指标。
+    """
+    if "reference" not in dataset.column_names and "ground_truth" in dataset.column_names:
+        dataset = dataset.add_column("reference", [value or "" for value in dataset["ground_truth"]])
+
+    has_reference = "reference" in dataset.column_names
+    requested = metrics or (REFERENCE_DEFAULT_METRICS if has_reference else REFERENCE_FREE_DEFAULT_METRICS)
+    metric_names: list[str] = []
+    skipped: list[str] = []
+
+    for name in requested:
+        if name in REFERENCE_REQUIRED_METRICS and not has_reference:
+            skipped.append(name)
+            continue
+        metric_names.append(name)
+
+    if skipped:
+        logger.warning(
+            "跳过需要 reference/ground_truth 的 RAGAS 指标: %s",
+            skipped,
+        )
+    if not metric_names:
+        raise ValueError(
+            "当前数据集没有 reference/ground_truth，无法运行所选指标；"
+            "请补充标准答案或选择 faithfulness、answer_relevancy"
+        )
+
+    return dataset, metric_names
 
 
 class RAGASEvaluator:
@@ -167,7 +215,7 @@ class RAGASEvaluator:
           - question (str)
           - answer (str)
           - contexts (list[str])
-          - ground_truth (str, 可选 —— 用于 context_recall)
+          - ground_truth/reference (str, 可选 —— 用于 context_precision/context_recall)
         """
         required = {"question", "answer", "contexts"}
         missing = required - set(dataset.column_names)
@@ -187,10 +235,8 @@ class RAGASEvaluator:
         """执行 RAGAS evaluate，返回结构化的 EvalResult"""
         from ragas import evaluate as ragas_evaluate
 
-        # 1. 确定指标列表
-        metric_names = metrics or ["faithfulness", "answer_relevancy", "context_precision"]
-        if "ground_truth" in dataset.column_names and "context_recall" not in metric_names:
-            metric_names.append("context_recall")
+        # 1. 准备数据集并确定可运行的指标列表
+        dataset, metric_names = _prepare_dataset_and_metric_names(dataset, metrics)
 
         # 2. 构建指标实例
         selected = _build_ragas_metrics(
@@ -222,7 +268,11 @@ class RAGASEvaluator:
         df = result.to_pandas()
 
         # 聚合分数
-        score_cols = [c for c in df.columns if c not in ("question", "answer", "contexts", "ground_truth")]
+        score_cols = [
+            c
+            for c in df.columns
+            if c not in ("question", "answer", "contexts", "ground_truth", "reference")
+        ]
         scores = {}
         for col in score_cols:
             try:

@@ -58,6 +58,17 @@ def _add_evaluate_parser(subparsers) -> None:
     p.set_defaults(func=_cmd_evaluate)
 
 
+def _add_evaluate_auto_parser(subparsers) -> None:
+    p = subparsers.add_parser("evaluate-auto", help="从自动沉淀问答样本运行 RAGAS 评估")
+    p.add_argument("--limit", type=int, default=50, help="读取最近多少条自动样本")
+    p.add_argument("--subject", type=str, default=None, help="学科过滤")
+    p.add_argument("--grade", type=str, default=None, help="年级过滤")
+    p.add_argument("--metrics", type=str, default=None, help="评估指标，逗号分隔")
+    p.add_argument("--name", type=str, default="auto_samples", help="评估任务名称")
+    p.add_argument("--no-save", action="store_true", help="不保存评估结果到数据库")
+    p.set_defaults(func=_cmd_evaluate_auto)
+
+
 async def _cmd_evaluate(args: argparse.Namespace) -> None:
     from evaluation.pipeline import run_live_evaluation
     from main import build_app_state
@@ -100,12 +111,43 @@ async def _cmd_evaluate(args: argparse.Namespace) -> None:
 
     print(f"数据集大小: {len(dataset)} 条样本")
 
-    metrics = args.metrics.split(",") if args.metrics else None
+    metrics = [metric.strip() for metric in args.metrics.split(",") if metric.strip()] if args.metrics else None
     result = await run_evaluation(
         dataset=dataset,
         name=args.name,
         metrics=metrics,
         save_to_db=args.save,
+    )
+
+    print("\n聚合得分:")
+    for metric, score in sorted(result.scores.items()):
+        print(f"  {metric:30s}: {score:.4f}")
+
+
+async def _cmd_evaluate_auto(args: argparse.Namespace) -> None:
+    from models.db_models import init_db
+
+    await init_db()
+    print(
+        f"从自动问答测试集构建数据集: limit={args.limit}, "
+        f"subject={args.subject}, grade={args.grade}"
+    )
+    dataset = await EvalDatasetBuilder.from_auto_samples(
+        limit=args.limit,
+        subject=args.subject,
+        grade=args.grade,
+    )
+    if len(dataset) == 0:
+        print("自动问答测试集为空，请先完成至少一次门控通过的 RAG 问答")
+        sys.exit(1)
+
+    print(f"数据集大小: {len(dataset)} 条样本")
+    metrics = args.metrics.split(",") if args.metrics else None
+    result = await run_evaluation(
+        dataset=dataset,
+        name=args.name,
+        metrics=metrics,
+        save_to_db=not args.no_save,
     )
 
     print("\n聚合得分:")
@@ -268,6 +310,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="RAGAS 评估 / 测试集管理 CLI")
     subparsers = parser.add_subparsers(title="子命令", dest="command", help="可用命令")
     _add_evaluate_parser(subparsers)
+    _add_evaluate_auto_parser(subparsers)
     _add_generate_parser(subparsers)
     _add_validate_parser(subparsers)
     _add_export_parser(subparsers)
@@ -278,7 +321,7 @@ def parse_args() -> argparse.Namespace:
 async def main():
     args = parse_args()
     if not hasattr(args, "func"):
-        print("请指定子命令: evaluate / generate / validate / export / retrieval-evaluate / retrieval-calibrate")
+        print("请指定子命令: evaluate / evaluate-auto / generate / validate / export / retrieval-evaluate / retrieval-calibrate")
         print("示例: python evaluation/cli.py evaluate --from-db --limit 30")
         sys.exit(1)
     if asyncio.iscoroutinefunction(args.func):

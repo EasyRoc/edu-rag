@@ -614,6 +614,28 @@ def cmd_eval_sample(args: argparse.Namespace) -> int:
     return subprocess.run(command, cwd=root).returncode
 
 
+def cmd_auto_score(args: argparse.Namespace) -> int:
+    root = Path(args.root).resolve()
+    command = [
+        resolve_python(root),
+        "evaluation/cli.py",
+        "evaluate-auto",
+        "--limit",
+        str(args.limit),
+        "--name",
+        args.name,
+    ]
+    if args.subject:
+        command.extend(["--subject", args.subject])
+    if args.grade:
+        command.extend(["--grade", args.grade])
+    if args.metrics:
+        command.extend(["--metrics", args.metrics])
+    if args.no_save:
+        command.append("--no-save")
+    return subprocess.run(command, cwd=root).returncode
+
+
 def cmd_help(args: argparse.Namespace) -> int:
     """以普通子命令形式打印完整操作菜单，支持 `./edu-rag help`。"""
     build_parser().print_help()
@@ -705,6 +727,15 @@ def build_parser() -> argparse.ArgumentParser:
     ask.add_argument("--session-id", default=None, help="会话 ID")
     ask.add_argument("--json", action="store_true", help="输出原始 JSON")
     ask.set_defaults(func=cmd_ask)
+
+    auto_score = subparsers.add_parser("as", help="评估最近自动沉淀的问答测试集")
+    auto_score.add_argument("--limit", type=int, default=50, help="读取最近多少条自动样本")
+    auto_score.add_argument("--subject", default=None, help="学科过滤")
+    auto_score.add_argument("--grade", default=None, help="年级过滤")
+    auto_score.add_argument("--metrics", default=None, help="评估指标，逗号分隔")
+    auto_score.add_argument("--name", default="auto_samples", help="评估任务名称")
+    auto_score.add_argument("--no-save", action="store_true", help="不保存评估结果到数据库")
+    auto_score.set_defaults(func=cmd_auto_score)
 
     test = subparsers.add_parser("test", help="运行核心回归测试")
     test.set_defaults(func=cmd_test)

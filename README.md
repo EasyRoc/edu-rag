@@ -218,6 +218,7 @@ SQLSourceAdapter
 | `./edu-rag upload-samples` | 上传 `sample_docs/` 下的样例文档 |
 | `./edu-rag delete-samples` | 删除由脚本上传的样例文档 |
 | `./edu-rag ask "问题"` | 命令行提问 |
+| `./edu-rag as` | 评估最近自动沉淀的问答测试集 |
 | `./edu-rag test` | 运行核心回归测试 |
 | `./edu-rag eval-sample` | 校验 `data/test_sets/manual_v1.jsonl` |
 
@@ -255,6 +256,7 @@ SQLSourceAdapter
 | `GET` | `/api/v1/analytics/recommend/{user_id}` | 推荐复习内容 |
 -->
 | `POST` | `/api/v1/evaluation/from-history` | 从历史 QA 运行 RAGAS 评估 |
+| `POST` | `/api/v1/evaluation/from-auto` | 从自动沉淀问答样本运行 RAGAS 评估 |
 | `POST` | `/api/v1/evaluation/from-content` | 上传或粘贴测试集并实时评估 |
 | `POST` | `/api/v1/evaluation/from-file` | 从服务器本地测试集文件评估 |
 | `POST` | `/api/v1/evaluation/live` | 给定问题列表，实时问答后评估 |
@@ -344,6 +346,23 @@ python evaluation/cli.py export --min-feedback 1 --limit 50
 
 RAGAS 结果默认写入 `evaluation_records` 表，前端和 API 都能查看历史。
 
+### 自动问答测试集评估
+
+正常问答过程中，系统会把“门控通过并成功生成”的教育类 RAG 问答自动沉淀到 `auto_eval_samples` 表。采集内容包含 `question`、`answer`、`contexts`、学科/年级、会话信息、检索门控决策、检索指标和重试记录。闲聊、拒答、Graph 异常或无引用的回答不会进入自动测试集。
+
+本地执行：
+
+```bash
+./edu-rag as
+./edu-rag as --limit 100
+./edu-rag as --subject 数学 --grade 七年级 --metrics faithfulness,answer_relevancy
+./edu-rag as --limit 20 --no-save
+```
+
+`./edu-rag as` 默认读取最近 50 条自动样本并保存 RAGAS 评估结果到 `evaluation_records`。它不要求 FastAPI 服务正在运行，但需要能初始化 SQLite，并且 RAGAS 使用的 LLM 配置可用。自动样本不是人工标准答案集，v1 不包含 `ground_truth/reference`，更适合做 `faithfulness`、`answer_relevancy` 等不依赖标准答案的回归观察；`context_precision`、`context_recall` 需要人工标准答案。
+
+前端 **效果评估** 页面支持在 **手动输入** 和 **自动测试集** 两种模式间切换。自动测试集模式调用 `/api/v1/evaluation/from-auto`，可以按最近样本数量、学科和年级过滤。
+
 ### 检索评估与门控校准
 
 代码位于 [evaluation/retrieval_evaluator.py](evaluation/retrieval_evaluator.py)。这条线不调用答案生成，只评估召回、排序、门控、重试收益和延迟。
@@ -390,6 +409,7 @@ python evaluation/cli.py retrieval-calibrate \
 | `data/test_sets/manual_v1.jsonl` | RAGAS / live eval 人工测试集 |
 | `data/test_sets/retrieval_manual_v1.example.jsonl` | 检索评估标注格式示例 |
 | `data/intent_training_data.jsonl` | 意图分类结果收集文件 |
+| `auto_eval_samples` | 成功 RAG 问答自动沉淀的 RAGAS 测试样本表 |
 
 SQLite 主要表：
 
@@ -398,6 +418,7 @@ SQLite 主要表：
 | `documents` | 文档元数据、入库状态、切片数量 |
 <!-- `knowledge_points` 暂未开发完成 -->
 | `qa_records` | 问答历史、引用、反馈、延迟 |
+| `auto_eval_samples` | 自动问答测试集样本 |
 | `evaluation_records` | RAGAS 评估记录 |
 
 ---
@@ -419,6 +440,7 @@ SQLite 主要表：
 .venv/bin/python test/test_retrieval_v1.py
 .venv/bin/python test/test_graph_v1.py
 .venv/bin/python test/test_retrieval_evaluation.py
+.venv/bin/python test/test_auto_eval_samples.py
 .venv/bin/python test/test_project_cli.py
 .venv/bin/python -m compileall -q main.py config.py api services core ingestion evaluation models test utils scripts
 ```

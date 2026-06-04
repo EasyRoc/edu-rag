@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -54,6 +55,7 @@ class ProjectCliTests(unittest.TestCase):
             "upload-samples",
             "delete-samples",
             "ask",
+            "as",
             "test",
             "eval-sample",
         ]:
@@ -139,6 +141,45 @@ class ProjectCliTests(unittest.TestCase):
             calls,
         )
         self.assertFalse(paths.sample_manifest.exists())
+
+    def test_as_command_delegates_to_auto_sample_evaluation_cli(self):
+        calls = []
+
+        def fake_run(command, cwd):
+            calls.append((command, cwd))
+            return subprocess.CompletedProcess(command, 0)
+
+        original_run = self.cli.subprocess.run
+        try:
+            self.cli.subprocess.run = fake_run
+            exit_code = self.cli.main(
+                [
+                    "--root",
+                    str(self.root),
+                    "as",
+                    "--limit",
+                    "3",
+                    "--subject",
+                    "数学",
+                    "--grade",
+                    "七年级",
+                    "--metrics",
+                    "faithfulness,answer_relevancy",
+                    "--name",
+                    "auto_test",
+                    "--no-save",
+                ]
+            )
+        finally:
+            self.cli.subprocess.run = original_run
+
+        self.assertEqual(0, exit_code)
+        command, cwd = calls[0]
+        self.assertEqual(Path(cwd).resolve(), self.root.resolve())
+        self.assertEqual(command[1:4], ["evaluation/cli.py", "evaluate-auto", "--limit"])
+        self.assertIn("3", command)
+        self.assertIn("--no-save", command)
+        self.assertIn("faithfulness,answer_relevancy", command)
 
 
 if __name__ == "__main__":

@@ -69,6 +69,30 @@ class QARecord(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+# ==================== 自动评估样本表 ====================
+
+class AutoEvalSample(Base):
+    """从成功 RAG 问答自动沉淀的 RAGAS 评估样本"""
+    __tablename__ = "auto_eval_samples"
+
+    id = Column(String(64), primary_key=True, default=lambda: str(uuid.uuid4()))
+    question = Column(Text, nullable=False)
+    answer = Column(Text, nullable=False)
+    contexts = Column(JSON, default=list)
+    subject = Column(String(32), default="", index=True)
+    grade = Column(String(32), default="", index=True)
+    complexity = Column(String(16), default="medium")
+    session_id = Column(String(64), default="", index=True)
+    user_id = Column(String(64), nullable=True, index=True)
+    qa_record_id = Column(String(64), nullable=True, index=True)
+    reference_count = Column(Integer, default=0)
+    retrieval_decision = Column(JSON, default=dict)
+    retrieval_metrics = Column(JSON, default=dict)
+    retrieval_attempts = Column(JSON, default=list)
+    latency_ms = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+
 # ==================== 评估结果表 ====================
 
 class EvaluationRecord(Base):
@@ -114,7 +138,6 @@ async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("数据库表创建完成")
-
 
 
 

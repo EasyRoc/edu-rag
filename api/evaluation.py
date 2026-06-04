@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Annotated
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 
 from evaluation.dataset_builder import EvalDatasetBuilder
@@ -14,6 +15,11 @@ from sqlalchemy import select, desc
 from utils.logger import logger
 
 router = APIRouter(prefix="/api/v1/evaluation", tags=["RAGAS 评估"])
+
+
+def _parse_metrics(metrics: str | None) -> list[str] | None:
+    """解析前端或 CLI 传入的逗号分隔指标名，自动忽略空白项。"""
+    return [m.strip() for m in metrics.split(",") if m.strip()] if metrics else None
 
 
 def get_vector_store(request: Request):
@@ -35,7 +41,7 @@ async def evaluate_from_history(
     """基于历史问答记录运行 RAGAS 评估"""
     logger.info("API 触发评估: from_history, limit=%d, subject=%s", limit, subject)
 
-    metric_list = metrics.split(",") if metrics else None
+    metric_list = _parse_metrics(metrics)
     dataset = await EvalDatasetBuilder.from_db(limit=limit, subject=subject)
     if len(dataset) == 0:
         return AskResponse(code=1, message="没有找到可评估的问答记录", data=None)
@@ -45,6 +51,48 @@ async def evaluate_from_history(
         name=f"from_history_{subject or 'all'}",
         metrics=metric_list,
     )
+    return AskResponse(data=eval_result_to_dict(result))
+
+
+# ----------------------------------------------------------------
+# 从自动沉淀问答样本评估
+# ----------------------------------------------------------------
+@router.post("/from-auto", response_model=AskResponse)
+async def evaluate_from_auto(
+    limit: Annotated[int, Query(ge=1, le=500, description="取最近多少条自动问答样本进行评估")] = 50,
+    subject: Annotated[str | None, Query(description="按学科过滤")] = None,
+    grade: Annotated[str | None, Query(description="按年级过滤")] = None,
+    metrics: Annotated[str | None, Query(description="评估指标，逗号分隔")] = None,
+    name: Annotated[str, Query(description="评估任务名称")] = "auto_samples",
+    save: Annotated[bool, Query(description="是否保存评估结果")] = True,
+):
+    """基于自动沉淀的成功 RAG 问答样本运行 RAGAS 评估。"""
+    logger.info(
+        "API 触发评估: from_auto, limit=%d, subject=%s, grade=%s, name=%s",
+        limit,
+        subject,
+        grade,
+        name,
+    )
+
+    dataset = await EvalDatasetBuilder.from_auto_samples(
+        limit=limit,
+        subject=subject,
+        grade=grade,
+    )
+    if len(dataset) == 0:
+        return AskResponse(code=1, message="自动问答测试集为空，请先完成至少一次门控通过的 RAG 问答", data=None)
+
+    try:
+        result = await run_evaluation(
+            dataset=dataset,
+            name=name,
+            metrics=_parse_metrics(metrics),
+            save_to_db=save,
+        )
+    except ValueError as e:
+        logger.warning("自动样本评估参数不兼容: %s", e)
+        return AskResponse(code=1, message=str(e), data=None)
     return AskResponse(data=eval_result_to_dict(result))
 
 
@@ -95,7 +143,7 @@ async def evaluate_from_content(
     if not questions:
         raise HTTPException(status_code=400, detail="测试集中没有有效的 question 字段")
 
-    metric_list = metrics.split(",") if metrics else None
+    metric_list = _parse_metrics(metrics)
     result = await run_live_evaluation(
         questions=questions,
         vector_store=vector_store,
@@ -117,7 +165,7 @@ async def evaluate_from_file(
     metrics: str | None = Query(None, description="评估指标，逗号分隔"),
 ):
     """上传测试集 JSON 文件并运行评估"""
-    metric_list = metrics.split(",") if metrics else None
+    metric_list = _parse_metrics(metrics)
     dataset = EvalDatasetBuilder.from_file(file_path)
     result = await run_evaluation(
         dataset=dataset,
@@ -140,7 +188,7 @@ async def evaluate_live(
 ):
     """实时问答 + 评估：先让 RAG 系统回答问题，再用 RAGAS 评估"""
     vector_store = get_vector_store(request)
-    metric_list = metrics.split(",") if metrics else None
+    metric_list = _parse_metrics(metrics)
     result = await run_live_evaluation(
         questions=questions,
         vector_store=vector_store,

@@ -648,6 +648,17 @@
   /* ===== Evaluation Tab ===== */
   .eval-layout { max-width: 900px; margin: 0 auto; }
   .eval-panel { background: #fff; border-radius: var(--radius); box-shadow: var(--shadow); padding: 24px; }
+  .eval-mode-switch {
+    display: inline-flex; gap: 4px; padding: 4px; margin: 8px 0 16px;
+    border: 1px solid var(--gray-200); border-radius: 8px; background: var(--gray-50);
+  }
+  .eval-mode-btn {
+    border: none; background: transparent; color: var(--gray-600);
+    padding: 8px 14px; border-radius: 6px; cursor: pointer;
+    font-size: 14px; font-weight: 600; font-family: inherit;
+  }
+  .eval-mode-btn.active { background: var(--primary); color: white; }
+  .eval-mode-panel[hidden] { display: none; }
   .eval-dropzone {
     border: 2px dashed var(--gray-300); border-radius: var(--radius);
     padding: 32px; text-align: center; cursor: pointer; margin-bottom: 12px;
@@ -657,8 +668,12 @@
   .eval-dropzone .dropzone-icon { font-size: 36px; margin-bottom: 8px; }
   .eval-dropzone .dropzone-text { color: var(--gray-500); font-size: 14px; }
   #eval-content { width: 100%; height: 160px; font-family: monospace; font-size: 13px; padding: 12px; border: 1px solid var(--gray-200); border-radius: var(--radius); margin-bottom: 12px; resize: vertical; box-sizing: border-box; }
+  .eval-auto-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
+  .eval-field label { display: block; font-size: 13px; font-weight: 600; color: var(--gray-700); margin-bottom: 6px; }
+  .eval-auto-hint { color: var(--gray-500); font-size: 13px; line-height: 1.6; margin-bottom: 12px; }
   .eval-metrics-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 12px; }
   .eval-check { display: flex; align-items: center; gap: 4px; font-size: 13px; cursor: pointer; }
+  .eval-check.disabled { color: var(--gray-400); cursor: not-allowed; }
   .eval-scores-bar { display: flex; gap: 16px; flex-wrap: wrap; margin: 16px 0; }
   .eval-score-card {
     flex: 1; min-width: 140px; text-align: center; padding: 16px;
@@ -709,6 +724,9 @@
     .sidebar-footer { display: none; }
     .main { padding: 16px; }
     .form-row { grid-template-columns: 1fr; }
+    .eval-auto-grid { grid-template-columns: 1fr; }
+    .eval-mode-switch { width: 100%; }
+    .eval-mode-btn { flex: 1; }
   }
 </style>
 </head>
@@ -993,22 +1011,47 @@
       <div class="eval-panel">
         <div class="panel-header">
           <h2>🧪 RAGAS 效果评估</h2>
-          <p>上传测试集文件或粘贴 JSONL 内容，系统自动对每个问题进行 RAG 回答并用 RAGAS 指标打分</p>
+          <p id="eval-mode-desc">上传测试集文件或粘贴 JSONL 内容，系统自动对每个问题进行 RAG 回答并用 RAGAS 指标打分</p>
         </div>
 
         <div class="eval-input-section">
-          <div id="eval-dropzone" class="eval-dropzone" onclick="document.getElementById('eval-file').click()">
-            <div class="dropzone-icon">📁</div>
-            <div class="dropzone-text">点击上传 或拖拽 JSON / JSONL 文件到此处</div>
-            <input type="file" id="eval-file" accept=".json,.jsonl" style="display:none" onchange="onEvalFilePicked(event)">
+          <div class="eval-mode-switch" role="tablist" aria-label="评估方式">
+            <button type="button" class="eval-mode-btn active" data-eval-mode="manual" role="tab" aria-selected="true" onclick="setEvalMode('manual')">手动输入</button>
+            <button type="button" class="eval-mode-btn" data-eval-mode="auto" role="tab" aria-selected="false" onclick="setEvalMode('auto')">自动测试集</button>
           </div>
-          <textarea id="eval-content" placeholder="或者直接粘贴 JSONL 内容到此处...&#10;&#10;每行一个 JSON 对象：&#10;{&quot;question&quot;: &quot;...&quot;, &quot;ground_truth&quot;: &quot;...&quot;}"></textarea>
+
+          <div class="eval-mode-panel" id="eval-manual-panel">
+            <div id="eval-dropzone" class="eval-dropzone" onclick="document.getElementById('eval-file').click()">
+              <div class="dropzone-icon">📁</div>
+              <div class="dropzone-text">点击上传 或拖拽 JSON / JSONL 文件到此处</div>
+              <input type="file" id="eval-file" accept=".json,.jsonl" style="display:none" onchange="onEvalFilePicked(event)">
+            </div>
+            <textarea id="eval-content" placeholder="或者直接粘贴 JSONL 内容到此处...&#10;&#10;每行一个 JSON 对象：&#10;{&quot;question&quot;: &quot;...&quot;, &quot;ground_truth&quot;: &quot;...&quot;}"></textarea>
+          </div>
+
+          <div class="eval-mode-panel" id="eval-auto-panel" hidden>
+            <div class="eval-auto-grid">
+              <div class="eval-field">
+                <label for="eval-auto-limit">样本数量</label>
+                <input type="number" id="eval-auto-limit" min="1" max="500" value="50">
+              </div>
+              <div class="eval-field">
+                <label for="eval-auto-subject">学科</label>
+                <input type="text" id="eval-auto-subject" placeholder="全部学科">
+              </div>
+              <div class="eval-field">
+                <label for="eval-auto-grade">年级</label>
+                <input type="text" id="eval-auto-grade" placeholder="全部年级">
+              </div>
+            </div>
+            <p class="eval-auto-hint">从系统自动沉淀的成功 RAG 问答中读取最近样本，适合做 faithfulness、answer_relevancy 回归观察。需要人工标准答案的指标会在自动模式下禁用。</p>
+          </div>
 
           <div class="eval-metrics-row">
             <label class="eval-check"><input type="checkbox" value="faithfulness" checked> Faithfulness</label>
             <label class="eval-check"><input type="checkbox" value="answer_relevancy" checked> Answer Relevancy</label>
-            <label class="eval-check"><input type="checkbox" value="context_precision"> Context Precision</label>
-            <label class="eval-check"><input type="checkbox" value="context_recall"> Context Recall</label>
+            <label class="eval-check"><input type="checkbox" value="context_precision" data-needs-reference="true"> Context Precision</label>
+            <label class="eval-check"><input type="checkbox" value="context_recall" data-needs-reference="true"> Context Recall</label>
             <button class="btn btn-primary" id="eval-run-btn" onclick="runEvaluation()">🚀 运行评估</button>
           </div>
         </div>
@@ -1635,6 +1678,35 @@ async function createKnowledgePoint() {
 }
 
 // ==================== 效果评估 ====================
+let evalMode = 'manual';
+
+function getEvalRunButtonText() {
+  return evalMode === 'auto' ? '🚀 运行自动评估' : '🚀 运行评估';
+}
+
+function setEvalMode(mode) {
+  evalMode = mode === 'auto' ? 'auto' : 'manual';
+  const isAuto = evalMode === 'auto';
+  document.getElementById('eval-manual-panel').hidden = isAuto;
+  document.getElementById('eval-auto-panel').hidden = !isAuto;
+  document.getElementById('eval-mode-desc').textContent = isAuto
+    ? '读取自动沉淀的成功 RAG 问答样本，直接用 RAGAS 指标做回归评估'
+    : '上传测试集文件或粘贴 JSONL 内容，系统自动对每个问题进行 RAG 回答并用 RAGAS 指标打分';
+  document.querySelectorAll('.eval-mode-btn').forEach(btn => {
+    const active = btn.dataset.evalMode === evalMode;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
+  document.querySelectorAll('#tab-evaluation .eval-check input[data-needs-reference="true"]').forEach(input => {
+    input.disabled = isAuto;
+    if (isAuto) input.checked = false;
+    const label = input.closest('.eval-check');
+    if (label) label.classList.toggle('disabled', isAuto);
+  });
+  const btn = document.getElementById('eval-run-btn');
+  if (btn && !btn.disabled) btn.textContent = getEvalRunButtonText();
+}
+
 function onEvalFilePicked(e) {
   const file = e.target.files[0];
   if (!file) return;
@@ -1664,8 +1736,9 @@ function onEvalFilePicked(e) {
 })();
 
 async function runEvaluation() {
-  const content = document.getElementById('eval-content').value.trim();
-  if (!content) { showToast('请先上传文件或粘贴测试集内容', 'info'); return; }
+  const isAutoMode = evalMode === 'auto';
+  const manualContent = isAutoMode ? '' : document.getElementById('eval-content').value.trim();
+  if (!isAutoMode && !manualContent) { showToast('请先上传文件或粘贴测试集内容', 'info'); return; }
 
   const checks = document.querySelectorAll('#tab-evaluation .eval-check input[type=checkbox]:checked');
   const metrics = Array.from(checks).map(c => c.value).join(',');
@@ -1678,17 +1751,34 @@ async function runEvaluation() {
 
   btn.disabled = true; btn.textContent = '⏳ 评估中...';
   statusEl.style.display = 'block';
-  statusText.textContent = '评估中，请稍候...';
+  statusText.textContent = isAutoMode ? '正在评估自动测试集，请稍候...' : '评估中，请稍候...';
   resultsEl.style.display = 'none';
 
-  const formData = new FormData();
-  formData.append('content', content);
-  formData.append('metrics', metrics);
-
   try {
-    const resp = await fetch(API_BASE + '/api/v1/evaluation/from-content', {
-      method: 'POST', body: formData,
-    });
+    let resp;
+    if (isAutoMode) {
+      const rawLimit = Number(document.getElementById('eval-auto-limit').value || 50);
+      const limit = Math.min(500, Math.max(1, Number.isFinite(rawLimit) ? Math.floor(rawLimit) : 50));
+      const subject = document.getElementById('eval-auto-subject').value.trim();
+      const grade = document.getElementById('eval-auto-grade').value.trim();
+      const params = new URLSearchParams({
+        limit: String(limit),
+        metrics,
+        name: 'frontend_auto',
+      });
+      if (subject) params.set('subject', subject);
+      if (grade) params.set('grade', grade);
+      resp = await fetch(API_BASE + '/api/v1/evaluation/from-auto?' + params.toString(), {
+        method: 'POST',
+      });
+    } else {
+      const formData = new FormData();
+      formData.append('content', manualContent);
+      formData.append('metrics', metrics);
+      resp = await fetch(API_BASE + '/api/v1/evaluation/from-content', {
+        method: 'POST', body: formData,
+      });
+    }
     const json = await resp.json();
     if (json.code !== 0) { throw new Error(json.message || '评估失败'); }
     renderEvalResults(json.data);
@@ -1696,7 +1786,7 @@ async function runEvaluation() {
   } catch (err) {
     showToast('评估失败: ' + err.message, 'error');
   } finally {
-    btn.disabled = false; btn.textContent = '🚀 运行评估';
+    btn.disabled = false; btn.textContent = getEvalRunButtonText();
     statusEl.style.display = 'none';
   }
 }

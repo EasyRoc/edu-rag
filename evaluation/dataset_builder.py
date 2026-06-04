@@ -16,7 +16,7 @@ from datasets import Dataset, DatasetDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models.db_models import QARecord, get_session_maker
+from models.db_models import AutoEvalSample, QARecord, get_session_maker
 from utils.logger import logger
 
 
@@ -109,6 +109,46 @@ class EvalDatasetBuilder:
     def from_dicts(items: list[dict]) -> Dataset:
         """从字典列表构建"""
         return EvalDatasetBuilder._from_dicts(items)
+
+    # ----------------------------------------------------------------
+    # 从自动沉淀样本构建
+    # ----------------------------------------------------------------
+    @staticmethod
+    async def from_auto_samples(
+        limit: int = 50,
+        subject: str | None = None,
+        grade: str | None = None,
+    ) -> Dataset:
+        """从 auto_eval_samples 表读取最近的成功 RAG 问答样本。"""
+        session_maker = get_session_maker()
+        async with session_maker() as session:
+            query = select(AutoEvalSample)
+            if subject:
+                query = query.where(AutoEvalSample.subject == subject)
+            if grade:
+                query = query.where(AutoEvalSample.grade == grade)
+            query = query.order_by(AutoEvalSample.created_at.desc()).limit(limit)
+            records = (await session.execute(query)).scalars().all()
+
+        questions, answers, contexts_list = [], [], []
+        for record in records:
+            contexts = [text for text in (record.contexts or []) if text]
+            if not record.question or not record.answer or not contexts:
+                continue
+            questions.append(record.question)
+            answers.append(record.answer)
+            contexts_list.append(contexts)
+
+        logger.info(
+            "从自动评估样本构建数据集: 共 %d 条记录, 有效样本 %d 条",
+            len(records),
+            len(questions),
+        )
+        return Dataset.from_dict({
+            "question": questions,
+            "answer": answers,
+            "contexts": contexts_list,
+        })
 
     @staticmethod
     def _from_dicts(items: list[dict]) -> Dataset:

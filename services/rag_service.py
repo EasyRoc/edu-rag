@@ -10,7 +10,7 @@ from config import settings
 from core.state import RAGState
 from core.stream_queue import stream_queues
 from core.vectorestore import K12VectorStore
-from models.db_models import QARecord, get_session_maker
+from models.db_models import AutoEvalSample, QARecord, get_session_maker
 from utils.logger import logger
 
 
@@ -35,6 +35,9 @@ def format_references(docs: list[dict]) -> list[dict]:
         reference["source"] = doc.get("doc_id", "")
         references.append(reference)
     return references
+
+
+ABSTAIN_PREFIX = "抱歉，我暂时没有检索到足够可靠的资料"
 
 
 class RAGService:
@@ -139,6 +142,19 @@ class RAGService:
                 )
             except Exception as e:
                 logger.warning(f"保存问答记录失败: {e}")
+
+        await self._maybe_save_auto_eval_sample(
+            query=query,
+            answer=answer,
+            references=references,
+            final_state=final_state,
+            subject=subject,
+            grade=grade,
+            user_id=user_id,
+            session_id=session_id,
+            qa_record_id=record_id,
+            latency_ms=elapsed,
+        )
 
         logger.info(f"========== RAG 问答结束 ==========")
 
@@ -274,6 +290,20 @@ class RAGService:
             except Exception as e:
                 logger.warning(f"保存问答记录失败: {e}")
 
+        if not graph_error:
+            await self._maybe_save_auto_eval_sample(
+                query=query,
+                answer=final_answer,
+                references=references,
+                final_state=final_state,
+                subject=subject,
+                grade=grade,
+                user_id=user_id,
+                session_id=session_id,
+                qa_record_id=record_id,
+                latency_ms=elapsed,
+            )
+
         logger.info(f"========== RAG 流式问答结束 (耗时: {elapsed}ms) ==========")
         if graph_error:
             yield _sse("error", {
@@ -317,3 +347,69 @@ class RAGService:
             await session.commit()
             logger.debug(f"问答记录已保存: {record.id}")
             return record.id
+
+    @staticmethod
+    def _should_capture_auto_eval_sample(
+        *,
+        answer: str,
+        references: list[dict],
+        final_state: dict,
+    ) -> bool:
+        """判断本轮问答是否可沉淀为自动评估样本。"""
+        if final_state.get("intent") != "educational":
+            return False
+        if final_state.get("retrieval_decision", {}).get("action") != "accept":
+            return False
+        if not answer or answer.startswith(ABSTAIN_PREFIX):
+            return False
+        return any(ref.get("text") for ref in references)
+
+    async def _maybe_save_auto_eval_sample(
+        self,
+        *,
+        query: str,
+        answer: str,
+        references: list[dict],
+        final_state: dict,
+        subject: str | None,
+        grade: str | None,
+        user_id: str | None,
+        session_id: str,
+        qa_record_id: str | None,
+        latency_ms: int,
+    ) -> str | None:
+        """将成功 RAG 问答沉淀为自动评估样本，失败不影响用户请求。"""
+        if not self._should_capture_auto_eval_sample(
+            answer=answer,
+            references=references,
+            final_state=final_state,
+        ):
+            return None
+
+        contexts = [ref.get("text", "") for ref in references if ref.get("text")]
+        try:
+            session_maker = get_session_maker()
+            async with session_maker() as session:
+                sample = AutoEvalSample(
+                    question=query,
+                    answer=answer,
+                    contexts=contexts,
+                    subject=subject or "",
+                    grade=grade or "",
+                    complexity=final_state.get("complexity", "medium"),
+                    session_id=session_id,
+                    user_id=user_id,
+                    qa_record_id=qa_record_id,
+                    reference_count=len(contexts),
+                    retrieval_decision=final_state.get("retrieval_decision", {}),
+                    retrieval_metrics=final_state.get("retrieval_metrics", {}),
+                    retrieval_attempts=final_state.get("retrieval_attempts", []),
+                    latency_ms=latency_ms,
+                )
+                session.add(sample)
+                await session.commit()
+                logger.info("自动评估样本已保存: id=%s, references=%d", sample.id, len(contexts))
+                return sample.id
+        except Exception as e:
+            logger.warning("保存自动评估样本失败: %s", e)
+            return None
