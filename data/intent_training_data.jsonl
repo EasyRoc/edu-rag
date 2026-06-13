@@ -34,3 +34,13 @@
 {"query": "春", "intent": "chitchat", "confidence": 0.6, "source": "llm", "processing_time_ms": 2415.41}
 {"query": "朱自清《春》", "intent": "educational", "confidence": 0.95, "source": "llm", "processing_time_ms": 1361.1}
 {"query": "我想知道朱自清的《春》，也想知道他的《背影》还有徐志摩的《再别康桥》", "intent": "educational", "confidence": 0.95, "source": "llm", "processing_time_ms": 1278.23}
+{"query": "徐志摩", "intent": "educational", "confidence": 0.8, "source": "llm", "processing_time_ms": 1095.98}
+{"query": "朱自清", "intent": "educational", "confidence": 0.95, "source": "llm", "processing_time_ms": 1565.47}
+{"query": "比喻和拟人", "intent": "educational", "confidence": 0.95, "source": "llm", "processing_time_ms": 1237.45}
+{"query": "三国操作", "intent": "other", "confidence": 0.7, "source": "llm", "processing_time_ms": 2661.05}
+{"query": "三国教案", "intent": "educational", "confidence": 0.95, "source": "llm", "processing_time_ms": 1067.34}
+{"query": "三国教案", "intent": "educational", "confidence": 0.95, "source": "llm", "processing_time_ms": 1122.4}
+{"query": "三国教案", "intent": "educational", "confidence": 0.95, "source": "llm", "processing_time_ms": 1292.53}
+{"query": "三国教案", "intent": "educational", "confidence": 0.95, "source": "llm", "processing_time_ms": 1127.9}
+{"query": "朱自清《春》", "intent": "educational", "confidence": 0.95, "source": "llm", "processing_time_ms": 3786.16}
+{"query": "三国教案", "intent": "educational", "confidence": 0.95, "source": "llm", "processing_time_ms": 2685.37}

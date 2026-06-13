@@ -637,7 +637,7 @@ retrieve → rerank → retrieval_gate
 | 数据库 | SQLite + aiosqlite | 业务数据持久化 |
 | ORM | SQLAlchemy 2.0 (async) | 异步引擎 + session |
 | 流式输出 | SSE (Server-Sent Events) | asyncio.Queue 中转 token |
-| 评估 | RAGAS | retrieval/relevance 指标评估 |
+| 评估 | RAGAS 0.4.x | faithfulness / answer_relevancy / context_precision / context_recall 四大指标 |
 
 ---
 
@@ -663,3 +663,436 @@ retrieve → rerank → retrieval_gate
                                     │
                                     └──→ abstain ──→ 拒答返回
 ```
+
+---
+
+# 第五部分：RAGAS 评估体系
+
+## 5.1 评估定位与架构
+
+RAGAS 评估体系是整个 RAG 系统的**质量监控层**，对系统的检索质量和生成质量进行量化度量。评估分为两个维度：
+
+| 维度 | 评估内容 | 评测方式 |
+|------|---------|---------|
+| **生成质量** | 答案是否忠实于上下文、是否与问题相关 | RAGAS 四大指标（LLM + Embedding 联合评估） |
+| **检索质量** | 召回率、精确率、门控误判率、延迟分位数 | 离线标注集回放 + 排序指标计算 |
+
+整体架构：
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                        RAGAS 评估体系                             │
+│                                                                  │
+│  ┌─────────────────────┐    ┌──────────────────────────────┐    │
+│  │  测试集生成           │    │  评估执行                      │    │
+│  │  TestSetGenerator    │    │  pipeline.py                 │    │
+│  │                      │    │                              │    │
+│  │  A. 向量库采样+LLM生成 │───→│  1. 加载 Dataset              │    │
+│  │  B. QA历史筛选+补全   │    │  2. RAGASEvaluator 逐样本评估  │    │
+│  │  C. 自动沉淀样本      │    │  3. 聚合评分 + 打印报告        │    │
+│  │  D. 手动JSONL/JSON   │    │  4. 持久化到 EvaluationRecord  │    │
+│  └─────────────────────┘    └──────────────┬───────────────┘    │
+│                                            │                     │
+│  ┌─────────────────────┐    ┌──────────────▼───────────────┐    │
+│  │  检索离线评估         │    │  自动样本沉淀                  │    │
+│  │  retrieval_evaluator │    │  AutoEvalSample              │    │
+│  │                      │    │                              │    │
+│  │  回放标注集            │    │  RAG 成功后自动写入样本        │    │
+│  │  计算 recall/precision│   │  供后续批量评估使用             │    │
+│  │  门控阈值校准          │    │                              │    │
+│  └─────────────────────┘    └──────────────────────────────┘    │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+## 5.2 RAGAS 四大核心指标
+
+文件：`evaluation/ragas_evaluator.py`
+
+RAGAS (Retrieval Augmented Generation Assessment) 是一个专门评估 RAG 系统的开源框架，本项目使用 0.4.x 版本。四个指标需要 LLM 作为评判器（Judge），其中 `answer_relevancy` 还需要 Embedding 模型计算语义相似度。
+
+### 5.2.1 Faithfulness（忠实度）
+
+```
+评估问题：生成的答案中有多少内容可以从检索到的上下文中推断出来？
+
+评估流程：
+  1. LLM 将回答拆解为一组独立的"陈述"（claims）
+  2. 对每个陈述，LLM 判断其是否能从上下文中找到依据
+  3. Faithfulness = 有依据的陈述数 / 总陈述数
+```
+
+| 特征 | 说明 |
+|------|------|
+| 需要 LLM | ✅ |
+| 需要 Embedding | ❌ |
+| 需要 ground_truth | ❌ |
+| 典型阈值 | ≥ 0.80 |
+| 低分原因 | LLM 幻觉、上下文无关编造、过度发挥 |
+
+### 5.2.2 Answer Relevancy（答案相关性）
+
+```
+评估问题：生成的答案与用户问题的相关程度如何？
+
+评估流程：
+  1. LLM 根据回答反推出可能的几个"反向问题"（reverse questions）
+  2. Embedding 计算每个反向问题与原始问题的余弦相似度
+  3. Answer Relevancy = 所有反向问题相似度的均值
+```
+
+| 特征 | 说明 |
+|------|------|
+| 需要 LLM | ✅ |
+| 需要 Embedding | ✅（BAAI/bge-small-zh-v1.5） |
+| 需要 ground_truth | ❌ |
+| 典型阈值 | ≥ 0.70 |
+| 低分原因 | 答案跑题、答非所问、包含无关信息 |
+
+### 5.2.3 Context Precision（上下文精度）
+
+```
+评估问题：检索到的上下文中，有多少是真正相关的？（信号噪声比）
+
+评估流程：
+  1. 在上下文中识别与 ground_truth 相关的片段
+  2. 按检索排序位置加权：排名靠前的相关片段贡献更大
+  3. Context Precision = Σ(相关片段在位置k的命中率) / 相关片段总数
+```
+
+| 特征 | 说明 |
+|------|------|
+| 需要 LLM | ✅ |
+| 需要 Embedding | ❌ |
+| 需要 ground_truth | ✅（必须有标准答案或参考答案） |
+| 典型阈值 | ≥ 0.70 |
+| 低分原因 | 检索噪声大、召回了大量无关文档、BM25+Dense 未能互补 |
+
+### 5.2.4 Context Recall（上下文召回率）
+
+```
+评估问题：ground_truth 所需的信息，检索上下文是否都覆盖到了？
+
+评估流程：
+  1. LLM 分析 ground_truth，拆解出所需的关键信息点
+  2. 判断每个信息点是否能在检索到的上下文中找到
+  3. Context Recall = 能找到的信息点数 / 总信息点数
+```
+
+| 特征 | 说明 |
+|------|------|
+| 需要 LLM | ✅ |
+| 需要 Embedding | ❌ |
+| 需要 ground_truth | ✅（必须有标准答案或参考答案） |
+| 典型阈值 | ≥ 0.70 |
+| 低分原因 | 检索遗漏、切分策略不当导致关键信息丢失 |
+
+### 5.2.5 指标选择策略
+
+```
+                    ┌─────────────────────────────┐
+                    │   是否有 ground_truth？       │
+                    └────────────┬────────────────┘
+                                 │
+                 ┌───────────────┴───────────────┐
+                 │ YES                           │ NO
+                 ▼                               ▼
+    ┌────────────────────────┐    ┌────────────────────────────┐
+    │ 全量指标 (4项)           │    │ 无需标准答案指标 (2项)        │
+    │ - faithfulness          │    │ - faithfulness             │
+    │ - answer_relevancy      │    │ - answer_relevancy         │
+    │ - context_precision     │    │                            │
+    │ - context_recall        │    │ (自动跳过 context_precision │
+    └────────────────────────┘    │  和 context_recall)          │
+                                  └────────────────────────────┘
+```
+
+代码实现：`_prepare_dataset_and_metric_names()` 自动检测 dataset 是否有 `reference`/`ground_truth` 列，无则自动跳过依赖标准答案的指标。
+
+## 5.3 RAGAS 技术适配细节
+
+### 5.3.1 LLM Judge 配置
+
+RAGAS 使用项目本身的 LLM 作为评判器（Judge），通过 `ragas.llms.llm_factory` 封装：
+
+```
+项目配置                     RAGAS 适配
+─────────                    ──────────
+LLM_API_KEY  ──────────→  OpenAI client  ──→  llm_factory()  ──→  RAGAS Metrics
+LLM_BASE_URL               (api_key, base_url)     (model, client,
+LLM_MODEL                                            max_tokens=RAGAS_LLM_MAX_TOKENS)
+```
+
+关键配置 `RAGAS_LLM_MAX_TOKENS=8192`：Faithfulness 等指标需要 LLM 输出较长的 JSON 结构化判断结果，默认值太小会导致 JSON 截断、评估失败。
+
+### 5.3.2 Embedding 适配层
+
+文件：`ragas_evaluator.py:_LangChainStyleEmbeddingsAdapter`
+
+RAGAS 0.4.x 的 `AnswerRelevancy` 指标内部使用了 LangChain 风格的 `embed_query`/`embed_documents` 接口，而项目加载的 `ragas.embeddings.HuggingFaceEmbeddings` 提供的是 `embed_text`/`embed_texts`。适配器做桥接转换：
+
+```
+ragas HuggingFaceEmbeddings          _LangChainStyleEmbeddingsAdapter
+─────────────────────────────        ────────────────────────────────
+embed_text(text) → list[float]  ──→  embed_query(text) → list[float]
+embed_texts(texts) → list[...]  ──→  embed_documents(texts) → list[list[float]]
+```
+
+### 5.3.3 异步隔离执行
+
+RAGAS 内部使用 `asyncio.run()`，如果在 FastAPI 的事件循环中直接调用会导致嵌套事件循环冲突。解决方法：
+
+```python
+result = await asyncio.to_thread(
+    ragas_evaluate,   # 在独立线程中执行
+    dataset=dataset,
+    metrics=selected,
+)
+```
+
+## 5.4 评估数据流
+
+### 5.4.1 数据源
+
+文件：`evaluation/dataset_builder.py:EvalDatasetBuilder`
+
+评估数据集可从四个来源构建：
+
+| 数据源 | 方法 | 说明 |
+|--------|------|------|
+| **业务数据库** | `from_db()` | 从 `qa_records` 表提取历史问答，支持按学科/用户/feedback 过滤 |
+| **测试文件** | `from_file()` | JSON/JSONL 文件，需包含 question、answer、contexts，可含 ground_truth |
+| **自动沉淀样本** | `from_auto_samples()` | 从 `auto_eval_samples` 表读取门控通过的 RAG 问答样本 |
+| **手动构建** | `from_manual()` | 直接传入 question/answer/contexts 列表 |
+
+最终输出统一为 HuggingFace `Dataset` 格式，包含列：`question`、`answer`、`contexts`（`list[str]`）、`ground_truth`/`reference`（可选）。
+
+### 5.4.2 评估执行流程
+
+文件：`evaluation/pipeline.py`
+
+```
+evaluation/pipeline.py:run_evaluation()
+│
+├── 1. 初始化 RAGASEvaluator
+│       ├── 构建 LLM Judge（复用项目 LLM 配置）
+│       └── 加载 Embedding 模型（BAAI/bge-small-zh-v1.5）
+│
+├── 2. 数据集预处理（_prepare_dataset_and_metric_names）
+│       ├── 检测是否有 reference/ground_truth 列
+│       ├── 无则跳过 context_precision / context_recall
+│       └── ground_truth → 镜像为 reference（RAGAS 0.4.x 要求）
+│
+├── 3. 构建 RAGAS 指标实例（_build_ragas_metrics）
+│       ├── Faithfulness(llm=ragas_llm)
+│       ├── AnswerRelevancy(llm=ragas_llm, embeddings=ragas_embeddings)
+│       ├── ContextPrecision(llm=ragas_llm)   ← 需 reference
+│       └── ContextRecall(llm=ragas_llm)       ← 需 reference
+│
+├── 4. 执行 ragas.evaluate()（asyncio.to_thread 隔离）
+│
+├── 5. 解析 to_pandas() → EvalResult
+│       ├── 聚合得分：scores = {metric_name: mean_value}
+│       ├── 逐样本得分：samples = [EvalSample(question, answer, scores)]
+│       └── 附加元信息：任务名、时间戳、耗时、模型配置
+│
+├── 6. 持久化到 EvaluationRecord 表
+│       ├── task_name、metrics、scores、samples
+│       ├── config_snapshot（评估时的系统配置快照）
+│       └── elapsed_seconds
+│
+└── 7. 打印格式化报告（带进度条可视化）
+```
+
+### 5.4.3 实时评估模式
+
+文件：`evaluation/pipeline.py:run_live_evaluation()`
+
+区别于离线评估使用现成的 answer + contexts，实时评估是端到端的：
+
+```
+问题列表
+  │
+  ▼
+对每个问题调用 RAG 系统完整流程:
+  classify → retrieve → rerank → gate → generate
+  │
+  ▼
+收集每个问题的 answer + contexts
+  │
+  ▼
+构建 Dataset → run_evaluation() → RAGAS 评分
+```
+
+适用于：上线前全链路测试、夜间回归测试。
+
+## 5.5 测试集生成
+
+文件：`evaluation/testset_generator.py:TestSetGenerator`
+
+### 5.5.1 三种生成方式
+
+| 方式 | 说明 |
+|------|------|
+| **A. 向量库采样 + LLM 生成** | 从 Milvus 随机采样文档片段，LLM 据此生成 question + ground_truth |
+| **B. QA 历史筛选 + 补全** | 从 qa_records 筛选高质量问答，LLM 补全 ground_truth |
+| **C. 自动沉淀** | RAG 在线服务通过门控后，自动写入 auto_eval_samples 表 |
+
+### 5.5.2 方式 A 详细流程
+
+```
+from_vectorestore()
+│
+├── 1. 从 Milvus 随机采样文档（支持 subject/grade 过滤）
+│
+├── 2. 每段文档调用 LLM，Prompt 包含：
+│       - 文档内容（≤3000 字符）
+│       - 学科/年级信息
+│       - 三个难度要求：simple（事实检索）、medium（概念解释）、complex（综合推理）
+│
+├── 3. LLM 返回 JSON 数组：
+│       [{"question": "...", "ground_truth": "...", "complexity": "simple/medium/complex", "question_type": "定义题/计算题/..."}]
+│
+└── 4. 解析 JSON 响应（支持 ```json 代码块、裸数组三种容错解析）
+```
+
+### 5.5.3 测试集校验
+
+`TestSetGenerator.validate()` 执行以下检查：
+
+| 校验项 | 说明 |
+|--------|------|
+| 问题去重 | 相同问题文本（忽略大小写）只保留第一次出现 |
+| 空字段检测 | 统计缺失 question、ground_truth、contexts 的条目 |
+| 分布统计 | 按 complexity / subject / grade / question_type 统计分布 |
+| 输出报告 | 去重前后数量、各维度分布概况 |
+
+## 5.6 检索离线评估与门控校准
+
+文件：`evaluation/retrieval_evaluator.py`
+
+这是独立于 RAGAS 生成质量评估的另一套评估维度，专注于**检索管道和质量门控**的性能。
+
+### 5.6.1 检索排序指标
+
+对于有 `relevant_chunk_ids` 标注的样本（已知哪些 chunk 是真正相关的），计算标准 IR 指标：
+
+| 指标 | 计算方式 |
+|------|---------|
+| `recall@5` / `recall@10` / `recall@20` | top-k 结果中命中的相关 chunk 占全部相关 chunk 的比例 |
+| `precision@5` | top-5 结果中相关 chunk 的比例 |
+| `mrr@10` (Mean Reciprocal Rank) | 第一个相关 chunk 排名的倒数均值 |
+| `ndcg@10` (Normalized DCG) | 折损累计增益，排名越靠前的相关 chunk 权重越高 |
+
+### 5.6.2 门控决策评估
+
+对标注为 `answerable=true` 和 `answerable=false` 的样本分别评估门控行为：
+
+```
+                  实际 answerable          实际 unanswerable
+               ┌──────────────────┬──────────────────────┐
+  门控 accept   │  True Positive   │  False Accept (误接受) │
+  门控 abstain  │  False Reject    │  True Negative        │
+  门控 retry    │  重试后可能恢复    │  重试后正确拒绝         │
+               └──────────────────┴──────────────────────┘
+```
+
+| 聚合指标 | 说明 |
+|---------|------|
+| `false_accept_rate` | unanswerable 样本被门控放行的比例（越低越好） |
+| `false_reject_rate` | answerable 样本被门控拒绝的比例（越低越好） |
+| `abstention_accuracy` | unanswerable 样本被正确拒答的比例（越高越好） |
+| `retry_recovery_rate` | 初次被拒但重试后恢复的比例 |
+
+### 5.6.3 门控阈值校准
+
+文件：`retrieval_evaluator.py:calibrate_thresholds()`
+
+在给定错误接受率预算下，网格搜索最优阈值组合：
+
+```
+calibrate_thresholds(case_results, max_false_accept_rate=0.05)
+│
+├── 遍历 top1_threshold ∈ [0.00, 0.05, ..., 1.00]  (21 档)
+│   └── 遍历 relevant_threshold ∈ [0.00, 0.05, ..., 1.00]  (21 档)
+│       ├── 模拟门控决策
+│       ├── 计算 false_accept_rate（必须 ≤ max_false_accept_rate）
+│       └── 计算 answerable_accept_rate
+│
+└── 选择最优组合（最大化可回答接受率，最小化误接受率，偏向当前配置附近的值）
+```
+
+### 5.6.4 分维度切片统计
+
+报告支持按 `subject`、`grade`、`complexity`、`strategy`、`retry_count` 五个维度切片，每个切片统计样本数和 accept/abstain 比率，便于定位特定场景下的门控短板。
+
+## 5.7 自动样本沉淀
+
+在生产环境的每次成功 RAG 问答后，系统自动将样本写入 `auto_eval_samples` 表：
+
+| 字段 | 说明 |
+|------|------|
+| `question` / `answer` / `contexts` | 问答核心数据 |
+| `subject` / `grade` / `complexity` | 学科/年级/难度元信息 |
+| `session_id` / `user_id` / `qa_record_id` | 回溯追踪信息 |
+| `retrieval_decision` | 门控决策记录 |
+| `retrieval_metrics` | 检索指标（candidate_count、relevant_count、top1_score 等） |
+| `retrieval_attempts` | 重试历史（每次重试的策略和结果） |
+| `latency_ms` | 端到端延迟 |
+
+CLI 命令 `evaluation/cli.py evaluate-auto` 可直接从这批自动沉淀样本批量运行 RAGAS 评估：
+
+```bash
+python evaluation/cli.py evaluate-auto --limit 50 --subject math
+```
+
+## 5.8 CLI 命令速查
+
+文件：`evaluation/cli.py`
+
+| 命令 | 说明 |
+|------|------|
+| `evaluate --from-db --limit 50` | 从 QA 历史记录提取数据集并评估 |
+| `evaluate --from-file test.jsonl` | 从 JSON/JSONL 文件加载数据集评估 |
+| `evaluate --from-file test.jsonl --live` | 实时模式：先通过 RAG 系统回答再评估 |
+| `evaluate-auto --limit 50` | 从自动沉淀样本批量评估 |
+| `generate --subject math --count 30` | LLM 生成测试集（question + ground_truth） |
+| `validate --file test.jsonl` | 校验测试集格式、去重、输出分布统计 |
+| `export --min-feedback 1 --limit 50` | 从 QA 历史导出测试集（LLM 补全 ground_truth） |
+| `retrieval-evaluate --from-file cases.jsonl` | 离线检索评估（召回率、门控误判率） |
+| `retrieval-calibrate --from-file cases.jsonl` | 门控阈值校准（网格搜索最优组合） |
+
+### 5.8.1 使用示例
+
+```bash
+# 基于最近 50 条 QA 记录评估 faithfulness + answer_relevancy
+python evaluation/cli.py evaluate --from-db --limit 50 \
+    --metrics faithfulness,answer_relevancy --save
+
+# 从自动沉淀样本评估全量指标（含 context precision/recall，如果样本有 ground_truth）
+python evaluation/cli.py evaluate-auto --limit 100 --subject math
+
+# 用 LLM 生成 30 道数学测试题
+python evaluation/cli.py generate --subject math --grade junior --count 30 \
+    --output data/test_sets/math_v2.jsonl
+
+# 离线检索评估：回放标注集，检查召回率和门控行为
+python evaluation/cli.py retrieval-evaluate --from-file data/test_sets/retrieval_cases.jsonl
+
+# 门控阈值校准：在 5% 错误接受率预算下推荐最优阈值
+python evaluation/cli.py retrieval-calibrate --from-file data/test_sets/retrieval_cases.jsonl \
+    --max-false-accept-rate 0.05
+```
+
+## 5.9 RAGAS 评估体系的文件索引
+
+| 文件 | 职责 |
+|------|------|
+| `evaluation/ragas_evaluator.py` | RAGAS 核心评估器：LLM/Embedding 适配、指标构建、批量+单样本评估 |
+| `evaluation/pipeline.py` | 评估流水线：离线评估 + 实时评估 + 结果持久化 + 报告打印 |
+| `evaluation/dataset_builder.py` | 数据集构建器：从 DB / 文件 / 自动样本 / 手动四种来源构建 Dataset |
+| `evaluation/testset_generator.py` | 测试集生成器：LLM 从向量库文档生成问答对 + QA 历史补全 ground_truth |
+| `evaluation/retrieval_evaluator.py` | 检索离线评估器：排序指标 + 门控决策评估 + 阈值校准 |
+| `evaluation/schemas.py` | 评估数据模型：EvalSample、EvalResult、JSON 序列化函数 |
+| `evaluation/cli.py` | 评估 CLI 入口：5 个子命令（evaluate/evaluate-auto/generate/validate/export）+ 2 个检索命令 |
+| `models/db_models.py` | 持久化模型：AutoEvalSample（自动沉淀样本表）、EvaluationRecord（评估结果表） |
+| `config.py` | 评估相关配置：RAGAS_LLM_MAX_TOKENS、RETRIEVAL_ACCEPT_TOP1_THRESHOLD、RETRIEVAL_GATE_MODE |
