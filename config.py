@@ -71,6 +71,16 @@ class Settings:
     DECOMPOSITION_MAX_SUB: int = int(os.getenv("DECOMPOSITION_MAX_SUB", "4"))     # 复杂问题最多拆解的子问题数
     STRATEGY_TIMEOUT: float = float(os.getenv("STRATEGY_TIMEOUT", "10"))           # 策略 LLM 调用超时(秒)
 
+    # ---------- 复杂问题深度处理 ----------
+    ENABLE_DEEP_COMPLEX_MODE: bool = os.getenv("ENABLE_DEEP_COMPLEX_MODE", "true").lower() in {"1", "true", "yes", "on"}
+    SUB_RERANK_TOP_K: int = int(os.getenv("SUB_RERANK_TOP_K", "6"))
+    COMPLEX_ACCEPT_TOP1_THRESHOLD: float = float(os.getenv("COMPLEX_ACCEPT_TOP1_THRESHOLD", "0.45"))
+    COMPLEX_RELEVANCE_THRESHOLD: float = float(os.getenv("COMPLEX_RELEVANCE_THRESHOLD", "0.35"))
+    COMPLEX_MAX_RETRIES: int = max(0, min(2, int(os.getenv("COMPLEX_MAX_RETRIES", "2"))))
+    SUB_ANSWER_MAX_TOKENS: int = int(os.getenv("SUB_ANSWER_MAX_TOKENS", "512"))
+    SYNTHESIS_MAX_TOKENS: int = int(os.getenv("SYNTHESIS_MAX_TOKENS", "4096"))
+    COMPLEX_CONTEXT_TOP_K: int = int(os.getenv("COMPLEX_CONTEXT_TOP_K", "8"))
+
     # ---------- 纠正重试 ----------
     MAX_RETRIES: int = max(0, min(2, int(os.getenv("MAX_RETRIES", "2"))))  # Corrective RAG 最大重试次数
 

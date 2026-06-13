@@ -94,6 +94,7 @@ def evaluate_retrieval_gate(
     gate_mode: str | None = None,
     relevant_threshold: float | None = None,
     accept_top1_threshold: float | None = None,
+    complexity: str = "medium",
 ) -> RetrievalDecision:
     """在线检索质量门控 —— 决定检回来的文档能不能用、要不要重试、还是放弃回答。
 
@@ -123,18 +124,19 @@ def evaluate_retrieval_gate(
     └─────────────────────────────────────────────────────────────────┘
     """
     mode = gate_mode or settings.RETRIEVAL_GATE_MODE
+    if complexity == "complex":
+        default_relevant = settings.COMPLEX_RELEVANCE_THRESHOLD
+        default_top1 = settings.COMPLEX_ACCEPT_TOP1_THRESHOLD
+        if max_retries == settings.MAX_RETRIES:
+            max_retries = settings.COMPLEX_MAX_RETRIES
+    else:
+        default_relevant = settings.RERANKER_RELEVANCE_THRESHOLD
+        default_top1 = settings.RETRIEVAL_ACCEPT_TOP1_THRESHOLD
+
     # 每条文档要被认定为"相关"的最低 rerank_score
-    relevant_min = (
-        settings.RERANKER_RELEVANCE_THRESHOLD
-        if relevant_threshold is None
-        else relevant_threshold
-    )
+    relevant_min = default_relevant if relevant_threshold is None else relevant_threshold
     # top1 文档直接放行的最低分数（远高于 relevant_min，确保领头文档足够可靠）
-    top1_min = (
-        settings.RETRIEVAL_ACCEPT_TOP1_THRESHOLD
-        if accept_top1_threshold is None
-        else accept_top1_threshold
-    )
+    top1_min = default_top1 if accept_top1_threshold is None else accept_top1_threshold
     metrics = compute_retrieval_metrics(docs, relevant_threshold=relevant_min)
 
     # ── 分支 1: 空召回 ──

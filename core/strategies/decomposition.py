@@ -43,7 +43,7 @@ async def decompose_query(query: str, max_sub: int | None = None) -> list[str]:
 
 
 def merge_sub_results(sub_results: list[list[dict]], top_k: int) -> list[dict]:
-    """合并子问题检索结果，按 score 去重排序"""
+    """合并子问题检索结果，按 score 去重排序，并保留子问题来源。"""
     if not sub_results:
         return []
 
@@ -51,8 +51,23 @@ def merge_sub_results(sub_results: list[list[dict]], top_k: int) -> list[dict]:
     for result_list in sub_results:
         for doc in result_list:
             chunk_key = doc.get("id", 0)
-            if chunk_key not in seen or doc["score"] > seen[chunk_key]["score"]:
-                seen[chunk_key] = doc
+            new_source = doc.get("source_sub_query", "")
+            if chunk_key not in seen:
+                seen[chunk_key] = dict(doc)
+                continue
+
+            existing = seen[chunk_key]
+            existing_source = existing.get("source_sub_query", "")
+            if doc["score"] > existing["score"]:
+                seen[chunk_key] = dict(doc)
+                if existing_source and existing_source not in new_source:
+                    seen[chunk_key]["source_sub_query"] = (
+                        f"{new_source}; {existing_source}" if new_source else existing_source
+                    )
+            elif new_source and new_source not in existing_source:
+                existing["source_sub_query"] = (
+                    f"{existing_source}; {new_source}" if existing_source else new_source
+                )
 
     merged = sorted(seen.values(), key=lambda d: d["score"], reverse=True)
     logger.info(f"子结果合并: {len(sub_results)} 组 → {len(merged)} 条（去重后）")

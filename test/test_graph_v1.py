@@ -260,6 +260,7 @@ def _initial_state(*, max_retries: int) -> dict:
         "retrieval_metrics": {},
         "retrieval_decision": {},
         "abstain_reason": "",
+        "sub_queries": [],
         "_queue_id": "",
     }
 

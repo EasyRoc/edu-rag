@@ -307,7 +307,7 @@ def test_retrieve_node_integration(result: TestResult, verbose: bool = False):
 
     async def _run():
         # simple 查询 → DIRECT 策略
-        docs = await hybrid_retrieve(
+        docs, _sub_queries = await hybrid_retrieve(
             vector_store=store,
             query="什么是浮力",
             complexity="simple",
@@ -321,12 +321,13 @@ def test_retrieve_node_integration(result: TestResult, verbose: bool = False):
 
     # medium 查询 → MULTI_QUERY 策略（LLM 不可用时降级为 DIRECT）
     async def _run_medium():
-        return await hybrid_retrieve(
+        docs, _sub_queries = await hybrid_retrieve(
             vector_store=store,
             query="浮力的应用和原理",
             complexity="medium",
             intent="educational",
         )
+        return docs
 
     docs2 = asyncio.run(_run_medium())
     result.add("I03: medium查询不报错（降级或正常）", True)
@@ -334,12 +335,13 @@ def test_retrieve_node_integration(result: TestResult, verbose: bool = False):
 
     # complex 查询 → DECOMPOSITION 策略（LLM 不可用时降级为 DIRECT）
     async def _run_complex():
-        return await hybrid_retrieve(
+        docs, _sub_queries = await hybrid_retrieve(
             vector_store=store,
             query="比较浮力和重力的区别并分析阿基米德原理",
             complexity="complex",
             intent="educational",
         )
+        return docs
 
     docs3 = asyncio.run(_run_complex())
     result.add("I03: complex查询不报错（降级或正常）", True)

@@ -108,15 +108,19 @@ async def _decomposition_retrieve(
     grade: str | None = None,
     *,
     top_k: int | None = None,
-) -> list[dict]:
+) -> tuple[list[dict], list[str]]:
     """复杂问题拆解召回：子问题分别检索，再合并去重。"""
     sub_queries = await decompose_query(query)
     if len(sub_queries) <= 1:
-        logger.info("问题分解结果不足，降级为直接检索")
-        return _direct_retrieve(vector_store, query, complexity, subject, grade, top_k=top_k)
+        logger.info("问题分解结果不足，降级为多查询检索")
+        docs = await _multi_query_retrieve(
+            vector_store, query, complexity, subject, grade, top_k=top_k
+        )
+        return docs, [query]
     limit = top_k or _top_k_for(complexity)
-    results = [
-        _search(
+    results = []
+    for item in sub_queries:
+        docs = _search(
             vector_store,
             query=item,
             subject=subject,
@@ -124,9 +128,10 @@ async def _decomposition_retrieve(
             top_k=max(3, limit // 2),
             strategy=StrategyType.DECOMPOSITION.value,
         )
-        for item in sub_queries
-    ]
-    return _annotate(merge_sub_results(results, limit), StrategyType.DECOMPOSITION.value, query)
+        for doc in docs:
+            doc["source_sub_query"] = item
+        results.append(docs)
+    return _annotate(merge_sub_results(results, limit), StrategyType.DECOMPOSITION.value, query), sub_queries
 
 
 async def build_retry_plan(
@@ -223,7 +228,7 @@ async def hybrid_retrieve(
     *,
     retrieval_plan: dict | None = None,
     candidate_top_k: int | None = None,
-) -> list[dict]:
+) -> tuple[list[dict], list[str]]:
     """召回候选文档；在线质量判断会在重排后完成。"""
     limit = candidate_top_k or settings.RETRIEVAL_CANDIDATE_TOP_K
     plan = retrieval_plan or {"strategy": "initial", "queries": [query]}
@@ -237,14 +242,17 @@ async def hybrid_retrieve(
             top_k=limit,
         )
         logger.info("纠正检索完成: strategy=%s, count=%d", plan.get("strategy"), len(docs))
-        return docs
+        return docs, []
 
     strategy = select_strategy(intent, complexity, query)
+    sub_queries: list[str] = []
     if strategy == StrategyType.DIRECT:
         docs = _direct_retrieve(vector_store, query, complexity, subject, grade, top_k=limit)
     elif strategy == StrategyType.MULTI_QUERY:
         docs = await _multi_query_retrieve(vector_store, query, complexity, subject, grade, top_k=limit)
     else:
-        docs = await _decomposition_retrieve(vector_store, query, complexity, subject, grade, top_k=limit)
+        docs, sub_queries = await _decomposition_retrieve(
+            vector_store, query, complexity, subject, grade, top_k=limit
+        )
     logger.info("检索候选完成: strategy=%s, count=%d", strategy.value, len(docs))
-    return docs
+    return docs, sub_queries

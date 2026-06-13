@@ -14,7 +14,7 @@ from langgraph.graph import END, StateGraph
 
 from config import settings
 from core.nodes.chitchat import chitchat_node
-from core.nodes.generator import llm_generate_stream
+from core.nodes.generator import generate_sub_answers, llm_generate_stream, synthesize_final_answer
 from core.nodes.query_classifier import classify_intent_async, classify_query_with_fallback
 from core.nodes.retriever import build_retry_plan, hybrid_retrieve
 from core.reranker import CrossEncoderReranker, RerankerUnavailableError
@@ -57,7 +57,7 @@ async def classify_node(state: RAGState) -> dict:
 async def retrieve_node(state: RAGState, vector_store: K12VectorStore) -> dict:
     """候选召回节点：只负责召回，不在这里做质量判断。"""
     started = time.perf_counter()
-    docs = await hybrid_retrieve(
+    docs, sub_queries = await hybrid_retrieve(
         vector_store=vector_store,
         query=state["query"],
         complexity=state["complexity"],
@@ -69,26 +69,41 @@ async def retrieve_node(state: RAGState, vector_store: K12VectorStore) -> dict:
     )
     latency_ms = round((time.perf_counter() - started) * 1000, 3)
     logger.info(
-        "retrieve: plan=%s, candidates=%d, latency_ms=%.3f",
+        "retrieve: plan=%s, candidates=%d, sub_queries=%d, latency_ms=%.3f",
         state.get("retrieval_plan", {}).get("strategy", "initial"),
         len(docs),
+        len(sub_queries),
         latency_ms,
     )
     return {
         "retrieved_docs": docs,
         "retrieval_latency_ms": latency_ms,
+        "sub_queries": sub_queries,
     }
 
 
 async def rerank_node(state: RAGState, reranker: CrossEncoderReranker) -> dict:
     """本地 CrossEncoder 重排节点。失败时交给门控决定是否拒答或观察放行。"""
     started = time.perf_counter()
+    docs = state.get("retrieved_docs", [])
     try:
-        docs = await reranker.rerank(state["query"], state.get("retrieved_docs", []))
+        if _should_use_two_stage_rerank(
+            state.get("complexity", "medium"),
+            state.get("sub_queries", []),
+            settings.ENABLE_DEEP_COMPLEX_MODE,
+        ):
+            docs = await _two_stage_rerank(
+                state["query"],
+                docs,
+                state.get("sub_queries", []),
+                reranker,
+            )
+        else:
+            docs = await reranker.rerank(state["query"], docs)
         available = True
     except RerankerUnavailableError as exc:
         logger.warning("本地重排不可用: %s", exc)
-        docs = list(state.get("retrieved_docs", []))
+        docs = list(docs)
         available = False
     latency_ms = round((time.perf_counter() - started) * 1000, 3)
     logger.info(
@@ -105,6 +120,61 @@ async def rerank_node(state: RAGState, reranker: CrossEncoderReranker) -> dict:
     }
 
 
+def _should_use_two_stage_rerank(
+    complexity: str,
+    sub_queries: list[str],
+    deep_mode_enabled: bool,
+) -> bool:
+    """复杂问题且存在多个子问题时启用两阶段重排。"""
+    return complexity == "complex" and len(sub_queries) >= 2 and deep_mode_enabled
+
+
+async def _two_stage_rerank(
+    original_query: str,
+    docs: list[dict],
+    sub_queries: list[str],
+    reranker: CrossEncoderReranker,
+) -> list[dict]:
+    """两阶段重排：子问题独立 rerank 后，再用原问题做最终 rerank。"""
+    if not docs:
+        return []
+
+    grouped: dict[str, list[dict]] = {}
+    no_source_key = "__no_source__"
+    for doc in docs:
+        source = str(doc.get("source_sub_query", ""))
+        matched = [item for item in sub_queries if item and item in source]
+        if not matched and source:
+            matched = [source]
+        if not matched:
+            matched = [no_source_key]
+        for key in matched:
+            grouped.setdefault(key, []).append(doc)
+
+    stage1_results: list[dict] = []
+    for source_query, group_docs in grouped.items():
+        query = original_query if source_query == no_source_key else source_query
+        reranked = await reranker.rerank(query, group_docs)
+        stage1_results.extend(reranked[: settings.SUB_RERANK_TOP_K])
+
+    seen_ids: set[str] = set()
+    merged: list[dict] = []
+    for doc in sorted(stage1_results, key=lambda item: item.get("rerank_score", 0.0), reverse=True):
+        doc_id = str(doc.get("id") or doc.get("chunk_id") or doc.get("text", ""))
+        if doc_id in seen_ids:
+            continue
+        seen_ids.add(doc_id)
+        merged.append(doc)
+
+    logger.info(
+        "两阶段重排: stage1_groups=%d, stage1_docs=%d, merged=%d",
+        len(grouped),
+        len(stage1_results),
+        len(merged),
+    )
+    return await reranker.rerank(original_query, merged)
+
+
 async def retrieval_gate_node(state: RAGState) -> dict:
     """统一检索门控节点：根据重排分数决定生成、重试或拒答。"""
     decision = evaluate_retrieval_gate(
@@ -112,6 +182,7 @@ async def retrieval_gate_node(state: RAGState) -> dict:
         retry_count=state.get("retry_count", 0),
         max_retries=state.get("max_retries", settings.MAX_RETRIES),
         reranker_available=state.get("reranker_available", False),
+        complexity=state.get("complexity", "medium"),
     )
     attempt = {
         "retry_count": state.get("retry_count", 0),
@@ -154,7 +225,28 @@ async def generate_node(state: RAGState) -> dict:
     """答案生成节点。只有门控通过的上下文才会进入这里。"""
     full_answer = ""
     queue_id = state.get("_queue_id")
-    docs = state.get("retrieved_docs", [])[: settings.GENERATION_CONTEXT_TOP_K]
+    all_docs = state.get("retrieved_docs", [])
+    sub_queries = state.get("sub_queries", [])
+
+    if _should_use_synthesis(
+        state.get("complexity", "medium"),
+        sub_queries,
+        settings.ENABLE_DEEP_COMPLEX_MODE,
+    ):
+        docs = all_docs[: settings.COMPLEX_CONTEXT_TOP_K]
+        sub_docs_map = _group_docs_by_sub_query(all_docs, sub_queries)
+        sub_answers = await generate_sub_answers(sub_queries, sub_docs_map)
+        full_answer = await synthesize_final_answer(state["query"], sub_answers, docs)
+        await stream_queues.emit(queue_id, full_answer)
+        logger.info(
+            "generate_complex: sub_queries=%d, context_docs=%d, answer_chars=%d",
+            len(sub_queries),
+            len(docs),
+            len(full_answer),
+        )
+        return {"answer": full_answer, "retrieved_docs": docs}
+
+    docs = all_docs[: settings.GENERATION_CONTEXT_TOP_K]
     async for token in llm_generate_stream(
         query=state["query"],
         context_docs=docs,
@@ -164,6 +256,36 @@ async def generate_node(state: RAGState) -> dict:
         await stream_queues.emit(queue_id, token)
     logger.info("generate: context_docs=%d, answer_chars=%d", len(docs), len(full_answer))
     return {"answer": full_answer, "retrieved_docs": docs}
+
+
+def _should_use_synthesis(
+    complexity: str,
+    sub_queries: list[str],
+    deep_mode_enabled: bool,
+) -> bool:
+    """复杂问题且存在多个子问题时，启用子答案合成路径。"""
+    return complexity == "complex" and len(sub_queries) >= 2 and deep_mode_enabled
+
+
+def _group_docs_by_sub_query(docs: list[dict], sub_queries: list[str]) -> dict[str, list[dict]]:
+    """按子问题来源给检索片段分组，缺失来源时用全局上下文兜底。"""
+    groups = {item: [] for item in sub_queries if item}
+    if not groups:
+        return {}
+
+    for doc in docs:
+        source = str(doc.get("source_sub_query", ""))
+        matched = [item for item in groups if item in source]
+        if source and source in groups and source not in matched:
+            matched.append(source)
+        for item in matched:
+            groups[item].append(doc)
+
+    fallback_docs = docs[: settings.SUB_RERANK_TOP_K]
+    for item, group_docs in groups.items():
+        if not group_docs:
+            groups[item] = fallback_docs
+    return groups
 
 
 async def abstain_node(state: RAGState) -> dict:

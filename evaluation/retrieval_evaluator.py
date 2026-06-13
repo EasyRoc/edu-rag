@@ -153,7 +153,7 @@ async def evaluate_retrieval_case(
 
     while True:
         started = time.perf_counter()
-        docs = await hybrid_retrieve(
+        docs, _sub_queries = await hybrid_retrieve(
             vector_store=vector_store,
             query=case["question"],
             complexity=case.get("complexity", "medium"),
@@ -175,6 +175,7 @@ async def evaluate_retrieval_case(
             retry_count=retry_count,
             max_retries=settings.MAX_RETRIES,
             reranker_available=reranker_available,
+            complexity=case.get("complexity", "medium"),
         )
         initial_action = initial_action or decision["action"]
         if decision["action"] != "retry":

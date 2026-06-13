@@ -28,4 +28,5 @@ class RAGState(TypedDict):
     retrieval_latency_ms: float
     rerank_latency_ms: float
     reranker_available: bool
+    sub_queries: list[str]
     _queue_id: str

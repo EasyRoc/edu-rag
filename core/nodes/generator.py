@@ -1,6 +1,7 @@
 """生成节点：基于检索结果，调用 LLM 生成回答"""
 from __future__ import annotations
 
+import asyncio
 from typing import AsyncGenerator
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
@@ -98,6 +99,78 @@ SYSTEM_PROMPT_TEMPLATE = """你是一个专业的 K12 教育助手，名叫"知�
 {query}
 """
 
+SUB_ANSWER_SYSTEM = """你是一个严谨的 K12 教育助手。
+请只根据参考资料回答当前子问题，不要扩展到原问题之外。
+如果资料不足，请直接说明该子问题资料不足。"""
+
+SUB_ANSWER_PROMPT = """## 子问题
+{sub_query}
+
+## 参考资料
+{context}
+
+请用 2-5 句话回答该子问题，并尽量保留关键条件、公式或概念。"""
+
+SYNTHESIS_SYSTEM = """你是一个专业的 K12 教育助手，擅长把多个子问题的答案合成为清晰、完整的总回答。
+请严格基于子问题答案和参考资料作答，不要编造事实。"""
+
+SYNTHESIS_PROMPT = """## 原问题
+{original_query}
+
+## 子问题答案
+{sub_answers}
+
+## 参考资料
+{context}
+
+请将以上子问题答案合成为对原问题的完整回答：
+1. 先直接回应原问题
+2. 再按逻辑说明每个关键点
+3. 对 K12 学生保持简明易懂
+4. 资料不足的部分要明确说明
+5. 末尾标注可对应的参考来源序号（如 [1][2]）"""
+
+
+def _format_context(context_docs: list[dict]) -> str:
+    """把检索片段格式化为带序号的上下文，便于生成阶段引用。"""
+    if not context_docs:
+        return "（无可用参考资料）"
+    parts = []
+    for i, doc in enumerate(context_docs):
+        text = str(doc.get("text", "")).strip()
+        if text:
+            parts.append(f"[{i + 1}] {text}")
+    return "\n\n".join(parts) or "（无可用参考资料）"
+
+
+def _build_sub_answer_prompt(sub_query: str, context_docs: list[dict]) -> str:
+    """构建子问题回答 prompt。"""
+    return SUB_ANSWER_PROMPT.format(
+        sub_query=sub_query,
+        context=_format_context(context_docs),
+    )
+
+
+def _build_synthesis_prompt(
+    original_query: str,
+    sub_answers: list[tuple[str, str]],
+    context_docs: list[dict],
+) -> str:
+    """构建复杂问题最终合成 prompt。"""
+    if sub_answers:
+        sub_answer_text = "\n\n".join(
+            f"{idx}. 子问题：{sub_query}\n答案：{answer or '资料不足，未生成有效子答案。'}"
+            for idx, (sub_query, answer) in enumerate(sub_answers, start=1)
+        )
+    else:
+        sub_answer_text = "（无可用子问题答案）"
+
+    return SYNTHESIS_PROMPT.format(
+        original_query=original_query,
+        sub_answers=sub_answer_text,
+        context=_format_context(context_docs),
+    )
+
 
 async def llm_generate(query: str, context_docs: list[dict]) -> str:
     """
@@ -132,6 +205,72 @@ async def llm_generate(query: str, context_docs: list[dict]) -> str:
     except Exception as e:
         logger.error(f"LLM 调用异常: {e}")
         return _mock_answer(query, context_docs)
+
+
+async def generate_sub_answers(
+    sub_queries: list[str],
+    sub_docs_map: dict[str, list[dict]],
+) -> list[tuple[str, str]]:
+    """逐个子问题生成中间答案，供复杂问题最终合成使用。"""
+    clean_queries = [item for item in sub_queries if item]
+    if not clean_queries:
+        return []
+    if not settings.LLM_API_KEY:
+        logger.warning("未配置 LLM_API_KEY，跳过复杂问题子答案生成")
+        return [(item, "") for item in clean_queries]
+
+    async def _generate_one(sub_query: str) -> tuple[str, str]:
+        docs = sub_docs_map.get(sub_query, [])
+        messages = [
+            SystemMessage(content=SUB_ANSWER_SYSTEM),
+            HumanMessage(content=_build_sub_answer_prompt(sub_query, docs)),
+        ]
+        messages = _trim_messages(messages, settings.LLM_MAX_CONTEXT_TOKENS)
+        try:
+            llm = get_chat_model(
+                temperature=0.2,
+                max_tokens=settings.SUB_ANSWER_MAX_TOKENS,
+                timeout=60.0,
+            )
+            response = await llm.ainvoke(messages)
+            answer = str(response.content).strip()
+            logger.debug("复杂问题子答案生成完成: sub_query=%s, chars=%d", sub_query[:40], len(answer))
+            return sub_query, answer
+        except Exception as exc:
+            logger.warning("复杂问题子答案生成失败: sub_query=%s, err=%s", sub_query[:40], exc)
+            return sub_query, ""
+
+    return await asyncio.gather(*(_generate_one(item) for item in clean_queries))
+
+
+async def synthesize_final_answer(
+    original_query: str,
+    sub_answers: list[tuple[str, str]],
+    context_docs: list[dict],
+) -> str:
+    """把多个子答案合成为最终回答。"""
+    if not settings.LLM_API_KEY:
+        logger.warning("未配置 LLM_API_KEY，复杂问题合成使用模拟回答")
+        return _mock_answer(original_query, context_docs)
+
+    messages = [
+        SystemMessage(content=SYNTHESIS_SYSTEM),
+        HumanMessage(content=_build_synthesis_prompt(original_query, sub_answers, context_docs)),
+    ]
+    messages = _trim_messages(messages, settings.LLM_MAX_CONTEXT_TOKENS)
+    try:
+        llm = get_chat_model(
+            temperature=0.3,
+            max_tokens=settings.SYNTHESIS_MAX_TOKENS,
+            timeout=120.0,
+        )
+        response = await llm.ainvoke(messages)
+        answer = str(response.content).strip()
+        logger.info("复杂问题最终合成完成，长度: %d 字符", len(answer))
+        return answer
+    except Exception as exc:
+        logger.error("复杂问题最终合成失败，回退普通生成: %s", exc)
+        return await llm_generate(original_query, context_docs)
 
 
 async def llm_generate_stream(
