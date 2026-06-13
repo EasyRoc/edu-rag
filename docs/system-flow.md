@@ -305,20 +305,20 @@ BM25 索引存储在内存中，用于混合检索（Milvus 向量 + BM25 关键
 │  Node 2: retrieve (策略检索)                    │
 │  simple → DIRECT 混合检索                       │
 │  medium → MULTI_QUERY 多查询融合                │
-│  complex → DECOMPOSITION 问题拆解               │
+│  complex → DECOMPOSITION 问题拆解 + 子问题标注   │
 └──────────────┬───────────────────────────────┘
                │
                ▼
 ┌──────────────────────────────────────────────┐
 │  Node 3: rerank (重排序)                       │
 │  CrossEncoder (bge-reranker-base) 逐对打分     │
-│  Sigmoid 归一化 → 按相关性排序                   │
+│  普通问题单阶段；复杂问题可两阶段重排             │
 └──────────────┬───────────────────────────────┘
                │
                ▼
 ┌──────────────────────────────────────────────┐
 │  Node 4: retrieval_gate (检索质量门控)          │
-│  四分支决策：accept / retry / abstain           │
+│  三分支决策：accept / retry / abstain           │
 └──────┬──────────┬──────────┬─────────────────┘
        │          │          │
    accept      retry     abstain
@@ -326,22 +326,22 @@ BM25 索引存储在内存中，用于混合检索（Milvus 向量 + BM25 关键
        ▼          ▼          ▼
 ┌──────────┐ ┌────────────┐ ┌──────────────────┐
 │ generate │ │retry_planner│ │ abstain          │
-│ 流式生成  │ │ 制定重试策略 │ │ "抱歉，暂无可靠   │
-│ 答案     │ │ → 回到retrieve│ │  资料..."       │
+│ 普通流式/ │ │ 制定重试策略 │ │ 固定拒答，不调用 │
+│ 复杂合成  │ │ → 回到retrieve│ │ LLM 生成        │
 └────┬─────┘ └────────────┘ └──────────────────┘
      │
      ▼
 ┌──────────────────────────────────────────────┐
-│  Node 8: finalize (更新对话历史)                │
+│  finalize (更新对话历史)                         │
 │  追加问答到 conversation_history               │
 └──────────────────────────────────────────────┘
 ```
 
-核心引擎：基于 **LangGraph StateGraph** 的 8 节点图，在 `core/graph.py` 中构建并编译。
+核心引擎：基于 **LangGraph StateGraph** 的节点图，在 `core/graph.py` 中构建并编译。Graph State 只保存可序列化数据；向量库、重排器等运行时对象通过闭包注入。
 
 ## 2.2 Node 1: Classify（意图分类 + 难度分级）
 
-文件：`nodes/query_classifier.py`
+文件：`core/nodes/query_classifier.py`
 
 ### 2.2.1 意图分类（两层递进）
 
@@ -387,7 +387,7 @@ BM25 索引存储在内存中，用于混合检索（Milvus 向量 + BM25 关键
 
 ## 2.3 Node 2: Retrieve（策略检索）
 
-文件：`core/strategies/selector.py` + `nodes/retriever.py`
+文件：`core/strategies/selector.py` + `core/nodes/retriever.py`
 
 ### 2.3.1 策略选择
 
@@ -397,7 +397,7 @@ BM25 索引存储在内存中，用于混合检索（Milvus 向量 + BM25 关键
 |------|------|------|
 | `simple` | `DIRECT` | 直接混合检索，单次查询 |
 | `medium` | `MULTI_QUERY` | LLM 生成多个查询变体，分别检索后 RRF 融合 |
-| `complex` | `DECOMPOSITION` | LLM 拆解为 2~4 个子问题，分别检索，合并去重后返回 |
+| `complex` | `DECOMPOSITION` | LLM 拆解为 2~4 个子问题，分别检索，标注来源并合并去重后返回 |
 
 ### 2.3.2 底层混合检索（K12VectorStore.hybrid_search）
 
@@ -432,8 +432,14 @@ BM25 索引存储在内存中，用于混合检索（Milvus 向量 + BM25 关键
 **DECOMPOSITION**（`strategies/decomposition.py`）：
 1. LLM 将复杂问题拆解为 2~4 个子问题（`DECOMPOSITION_MAX_SUB=4`）
 2. 每个子问题独立执行 `hybrid_search`
-3. 所有子问题结果合并，按 doc_id 去重
-4. 返回 top 20
+3. 每个候选片段标注 `source_sub_query`，记录“这个 chunk 是被哪个子问题召回的”
+4. 所有子问题结果合并，按 chunk id 去重；如果同一个 chunk 被多个子问题召回，合并保留多个来源
+5. 返回 `(docs, sub_queries)`，Graph State 会携带 `sub_queries` 供后续两阶段重排和子答案合成使用
+
+拆解降级：
+
+- 拆出 2 个以上子问题：正常执行 DECOMPOSITION。
+- 拆解结果不足或异常：降级到 `MULTI_QUERY`，避免复杂长问题退化成单查询 DIRECT。
 
 **HyDE**（`strategies/hyde.py`，用于重试）：
 1. LLM 生成"假设性文档"（Hypothetical Document）——以文档的口吻回答用户问题
@@ -448,7 +454,7 @@ BM25 索引存储在内存中，用于混合检索（Milvus 向量 + BM25 关键
 
 ## 2.4 Node 3: Rerank（重排序）
 
-文件：`core/reranker.py`
+文件：`core/reranker.py` + `core/graph.py`
 
 ### 2.4.1 模型
 
@@ -461,6 +467,8 @@ BM25 索引存储在内存中，用于混合检索（Milvus 向量 + BM25 关键
 | 开关 | `ENABLE_RERANKER=true` |
 
 ### 2.4.2 处理流程
+
+普通问题路径：
 
 ```
 候选文档列表 (最多20个)
@@ -484,11 +492,39 @@ Sigmoid 归一化 → [0, 1] 区间
 - 整个过程在 `asyncio.to_thread()` 中执行，不阻塞事件循环
 - 如果模型加载失败或被禁用，设置 `reranker_available=False`，文档原样通过
 
+### 2.4.3 复杂问题两阶段重排
+
+触发条件：
+
+```text
+complexity == "complex"
+and len(sub_queries) >= 2
+and ENABLE_DEEP_COMPLEX_MODE == true
+```
+
+处理流程：
+
+```text
+DECOMPOSITION 候选 docs
+    │
+    ├── 按 source_sub_query 分组
+    │
+    ├── Stage 1: rerank(sub_query, docs_by_sub_query)
+    │       每个子问题保留 SUB_RERANK_TOP_K 条
+    │
+    ├── 合并去重
+    │
+    └── Stage 2: rerank(original_query, merged_docs)
+            输出最终候选列表
+```
+
+这样做的目的：避免“只覆盖某个子方向的有效 chunk”因为无法匹配原始复杂问题的全部要求而被压低分。RRF 仍只负责候选排序，门控质量判断只读取 `[0,1]` 范围内的 `rerank_score`。
+
 ## 2.5 Node 4: Retrieval Gate（检索质量门控）
 
 文件：`core/retrieval_quality.py:evaluate_retrieval_gate()`
 
-### 2.5.1 四分支决策
+### 2.5.1 三分支决策
 
 ```
 检索结果
@@ -499,7 +535,7 @@ Sigmoid 归一化 → [0, 1] 区间
     │   ├── observe 模式 → accept (仅记录日志)
     │   └── enforce 模式 → abstain
     │
-    ├── 质量合格？(top1_score >= 0.60 且 relevant_count >= 1)
+    ├── 质量合格？(达到当前复杂度的 top1 阈值且 relevant_count >= 1)
     │   └── YES → accept
     │
     └── 质量不合格？
@@ -509,11 +545,15 @@ Sigmoid 归一化 → [0, 1] 区间
 
 ### 2.5.2 关键阈值
 
-| 阈值 | 默认值 | 说明 |
-|------|--------|------|
-| `RERANKER_RELEVANCE_THRESHOLD` | 0.50 | rerank 得分 ≥ 此值视为"相关" |
-| `RETRIEVAL_ACCEPT_TOP1_THRESHOLD` | 0.60 | top1 得分 ≥ 此值快速放行 |
-| `MAX_RETRIES` | 2 | 最大重试次数 |
+| 场景 | top1 接受阈值 | 相关候选阈值 | 重试次数 |
+|------|----------------|--------------|----------|
+| `simple` / `medium` | `RETRIEVAL_ACCEPT_TOP1_THRESHOLD=0.60` | `RERANKER_RELEVANCE_THRESHOLD=0.50` | `MAX_RETRIES=2` |
+| `complex` | `COMPLEX_ACCEPT_TOP1_THRESHOLD=0.45` | `COMPLEX_RELEVANCE_THRESHOLD=0.35` | `COMPLEX_MAX_RETRIES=2` |
+
+`RETRIEVAL_GATE_MODE` 控制重排器不可用时的行为：
+
+- `enforce`：直接 `abstain`，避免无重排质量分时继续生成。
+- `observe`：记录“本应拒答”的状态，但允许按旧流程生成，适合灰度观测。
 
 ### 2.5.3 质量指标
 
@@ -522,7 +562,7 @@ Sigmoid 归一化 → [0, 1] 区间
 | 指标 | 说明 |
 |------|------|
 | `candidate_count` | 候选文档数量 |
-| `relevant_count` | 相关文档数量（得分 ≥ 0.50） |
+| `relevant_count` | 相关文档数量（得分 ≥ 当前复杂度相关候选阈值） |
 | `distinct_doc_count` | 去重后的文档数 |
 | `top1_score` | 最高重排序得分 |
 | `topk_mean_score` | top-k 平均得分 |
@@ -531,9 +571,11 @@ Sigmoid 归一化 → [0, 1] 区间
 
 ## 2.6 Node 5: Generate（流式生成）
 
-文件：`nodes/generator.py`
+文件：`core/nodes/generator.py` + `core/graph.py`
 
 ### 2.6.1 上下文构建
+
+普通问题路径：
 
 ```
 reranked 文档列表 (top 5 = GENERATION_CONTEXT_TOP_K)
@@ -549,6 +591,22 @@ reranked 文档列表 (top 5 = GENERATION_CONTEXT_TOP_K)
   - HumanMessage / AIMessage: 对话历史
   - HumanMessage: 当前用户问题 + 上下文
 ```
+
+复杂问题路径：
+
+```
+reranked 文档列表 (top 8 = COMPLEX_CONTEXT_TOP_K)
+    │
+    ├── 按 source_sub_query 分组
+    │
+    ├── generate_sub_answers(sub_queries, sub_docs_map)
+    │      └── 每个子问题使用 SUB_ANSWER_MAX_TOKENS=512
+    │
+    └── synthesize_final_answer(original_query, sub_answers, context_docs)
+           └── 最终合成使用 SYNTHESIS_MAX_TOKENS=4096
+```
+
+复杂路径的触发条件与两阶段重排一致：`complexity == "complex"`、`sub_queries >= 2`、`ENABLE_DEEP_COMPLEX_MODE=true`。如果未配置 `LLM_API_KEY`，复杂路径会退回 `_mock_answer()`，保证本地 smoke 流程仍可运行。
 
 ### 2.6.2 Token 预算管理
 
@@ -580,26 +638,27 @@ SSE 事件 → 前端逐字渲染
 
 - 模型：ChatOpenAI(temperature=0.3, max_tokens=2048, timeout=120s)
 - 降级：无 API Key 时使用 `_mock_answer()`（拼接前 3 篇文档内容摘要）
+- 复杂问题合成路径目前会把完整合成答案一次性写入流式队列；普通路径仍逐 token 输出。
 
-## 2.7 Node 6: Chitchat（闲聊应答）
+## 2.7 Chitchat 分支（闲聊应答）
 
-文件：`nodes/chitchat.py`
+文件：`core/nodes/chitchat.py`
 
 - 非教育类意图的统一处理节点
 - 以"知学助手"身份友好回应
 - 温和引导学生回到学习话题
 - 同样支持流式输出和对话历史
 
-## 2.8 Node 7: Abstain（拒答）
+## 2.8 Abstain 分支（拒答）
 
-文件：`graph.py`
+文件：`core/graph.py`
 
 当检索质量不足且无剩余重试次数时，返回固定拒答：
-> 抱歉，我暂时没有检索到足够可靠的资料来回答这个问题。建议您换个问法试试，或者上传相关的教材资料后再次提问。
+> 抱歉，我暂时没有检索到足够可靠的资料来回答这个问题。你可以补充教材范围、年级或更具体的问题。
 
-## 2.9 Node 8: Finalize（对话终结）
+## 2.9 Finalize（对话终结）
 
-文件：`graph.py`
+文件：`core/graph.py`
 
 - 将当前问答对追加到 `conversation_history`
 - 裁剪到 `MAX_ROUNDS * 2 = 20` 条消息，防止状态无限膨胀
@@ -614,8 +673,8 @@ retrieve → rerank → retrieval_gate
               │         ▼
               └── retry_planner
                    (制定重试策略:
-                    Retry1: 盲扩召回 (多查询融合)
-                    Retry2+: HyDE 或 Step-Back)
+                    Retry1: 原问题 + 最多 3 个去重 query variants
+                    Retry2: 按门控原因选择 HyDE 或 Step-Back)
 ```
 
 最多重试 `MAX_RETRIES=2` 次。每次重试使用不同的策略，避免陷入同一种失败模式。
@@ -627,17 +686,17 @@ retrieve → rerank → retrieval_gate
 | 组件 | 技术选型 | 说明 |
 |------|---------|------|
 | Web 框架 | FastAPI | 异步 API，自动生成 Swagger 文档 |
-| 图编排 | LangGraph | 8 节点有状态图，MemorySaver 做 checkpoint |
+| 图编排 | LangGraph | 有状态图编排，MemorySaver 做本地 checkpoint |
 | 向量数据库 | Milvus Lite | 嵌入式，文件存储，无需单独部署 |
 | 稀疏检索 | BM25Okapi (rank_bm25) | 内存索引，bigram 中文分词 |
 | 融合算法 | RRF (k=60) | 对偶融合，无需调权 |
 | Embedding | BAAI/bge-small-zh-v1.5 | 512 维，CPU 推理 |
 | Reranker | BAAI/bge-reranker-base | CrossEncoder，sigmoid 归一化 |
-| LLM | DeepSeek-V4-Flash (兼容 OpenAI API) | 通过 langchain-openai 调用 |
+| LLM | OpenAI 兼容接口 | 通过 langchain-openai 调用；默认配置在 `config.py` / `.env` 中切换 |
 | 数据库 | SQLite + aiosqlite | 业务数据持久化 |
 | ORM | SQLAlchemy 2.0 (async) | 异步引擎 + session |
 | 流式输出 | SSE (Server-Sent Events) | asyncio.Queue 中转 token |
-| 评估 | RAGAS 0.4.x | faithfulness / answer_relevancy / context_precision / context_recall 四大指标 |
+| 评估 | RAGAS 0.4.x + 检索离线评估 | 答案质量、检索指标、门控校准、自动样本回归 |
 
 ---
 
@@ -657,11 +716,13 @@ retrieve → rerank → retrieval_gate
                               重排序 (Reranker)
                                     │
                                     ▼
-                              质量门控 ──→ accept ──→ LLM 流式生成 ──→ SSE 返回用户
+                              质量门控 ──→ accept ──→ 普通生成 / 复杂合成 ──→ SSE 返回用户
                                     │
                                     ├──→ retry ──→ 回到策略检索
                                     │
                                     └──→ abstain ──→ 拒答返回
+                                    │
+                                    └──→ 成功教育类 RAG 问答 ──→ auto_eval_samples
 ```
 
 ---
@@ -1027,7 +1088,19 @@ calibrate_thresholds(case_results, max_false_accept_rate=0.05)
 
 ## 5.7 自动样本沉淀
 
-在生产环境的每次成功 RAG 问答后，系统自动将样本写入 `auto_eval_samples` 表：
+在线问答完成后，`RAGService` 会尝试把高质量教育类 RAG 问答写入 `auto_eval_samples` 表。采集失败只记录 warning，不影响用户问答响应。
+
+采集条件：
+
+| 条件 | 要求 |
+|------|------|
+| 意图 | `intent == "educational"` |
+| 门控 | `retrieval_decision.action == "accept"` |
+| 答案 | 最终答案非空，且不是固定拒答文案 |
+| 引用 | `references` 至少包含一条带文本的引用 |
+| 异常 | Graph 执行无异常 |
+
+写入字段：
 
 | 字段 | 说明 |
 |------|------|
@@ -1036,7 +1109,7 @@ calibrate_thresholds(case_results, max_false_accept_rate=0.05)
 | `session_id` / `user_id` / `qa_record_id` | 回溯追踪信息 |
 | `retrieval_decision` | 门控决策记录 |
 | `retrieval_metrics` | 检索指标（candidate_count、relevant_count、top1_score 等） |
-| `retrieval_attempts` | 重试历史（每次重试的策略和结果） |
+| `retrieval_attempts` | 重试历史（每次尝试的策略、候选数、指标和门控结果） |
 | `latency_ms` | 端到端延迟 |
 
 CLI 命令 `evaluation/cli.py evaluate-auto` 可直接从这批自动沉淀样本批量运行 RAGAS 评估：
@@ -1044,6 +1117,16 @@ CLI 命令 `evaluation/cli.py evaluate-auto` 可直接从这批自动沉淀样�
 ```bash
 python evaluation/cli.py evaluate-auto --limit 50 --subject math
 ```
+
+项目根目录 CLI 对这个能力做了更短的封装：
+
+```bash
+./edu-rag as
+./edu-rag as --limit 100 --subject 数学 --grade 七年级
+./edu-rag as --metrics faithfulness,answer_relevancy --no-save
+```
+
+前端 **效果评估** 页面也支持 **手动输入** 与 **自动测试集** 两种模式切换；自动测试集模式调用 `/api/v1/evaluation/from-auto`，可按最近样本数量、学科、年级过滤。
 
 ## 5.8 CLI 命令速查
 
@@ -1055,6 +1138,7 @@ python evaluation/cli.py evaluate-auto --limit 50 --subject math
 | `evaluate --from-file test.jsonl` | 从 JSON/JSONL 文件加载数据集评估 |
 | `evaluate --from-file test.jsonl --live` | 实时模式：先通过 RAG 系统回答再评估 |
 | `evaluate-auto --limit 50` | 从自动沉淀样本批量评估 |
+| `./edu-rag as --limit 50` | 根目录项目 CLI 封装，等价于从自动沉淀样本评估 |
 | `generate --subject math --count 30` | LLM 生成测试集（question + ground_truth） |
 | `validate --file test.jsonl` | 校验测试集格式、去重、输出分布统计 |
 | `export --min-feedback 1 --limit 50` | 从 QA 历史导出测试集（LLM 补全 ground_truth） |
@@ -1093,6 +1177,6 @@ python evaluation/cli.py retrieval-calibrate --from-file data/test_sets/retrieva
 | `evaluation/testset_generator.py` | 测试集生成器：LLM 从向量库文档生成问答对 + QA 历史补全 ground_truth |
 | `evaluation/retrieval_evaluator.py` | 检索离线评估器：排序指标 + 门控决策评估 + 阈值校准 |
 | `evaluation/schemas.py` | 评估数据模型：EvalSample、EvalResult、JSON 序列化函数 |
-| `evaluation/cli.py` | 评估 CLI 入口：5 个子命令（evaluate/evaluate-auto/generate/validate/export）+ 2 个检索命令 |
+| `evaluation/cli.py` | 评估 CLI 入口：evaluate/evaluate-auto/generate/validate/export + 检索评估命令 |
 | `models/db_models.py` | 持久化模型：AutoEvalSample（自动沉淀样本表）、EvaluationRecord（评估结果表） |
-| `config.py` | 评估相关配置：RAGAS_LLM_MAX_TOKENS、RETRIEVAL_ACCEPT_TOP1_THRESHOLD、RETRIEVAL_GATE_MODE |
+| `config.py` | 评估与门控配置：RAGAS_LLM_MAX_TOKENS、RETRIEVAL_ACCEPT_TOP1_THRESHOLD、COMPLEX_ACCEPT_TOP1_THRESHOLD、RETRIEVAL_GATE_MODE |

@@ -103,9 +103,10 @@ python main.py
 | 问答接口 | `POST /api/v1/rag/ask` 非流式问答，`POST /api/v1/rag/ask-stream` SSE 流式问答 |
 | 会话隔离 | `session_id -> user_id -> UUID4`，LangGraph `thread_id` 按会话隔离 |
 | 意图分类 | 教育问题进入 RAG；非教育问题进入 `chitchat` 分支 |
-| 多策略召回 | `direct`、`multi_query`、`decomposition`，重试时使用 query variants / HyDE / Step-Back |
+| 多策略召回 | `direct`、`multi_query`、`decomposition`，复杂问题会携带 `sub_queries` 与 `source_sub_query` |
 | 混合检索 | Milvus COSINE 稠密检索 + 本地 BM25 稀疏检索 + RRF 候选融合 |
-| 重排与门控 | `BAAI/bge-reranker-base` CrossEncoder 懒加载；门控只使用 `[0,1]` 的 `rerank_score` |
+| 重排与门控 | `BAAI/bge-reranker-base` CrossEncoder 懒加载；复杂问题支持子问题感知两阶段重排 |
+| 复杂问题生成 | `complex + 多子问题` 可走子答案并行生成 + 最终合成，普通问题仍走原流式生成 |
 | 低质量拒答 | 检索证据不足时不进入 LLM 生成，返回固定拒答提示 |
 | 文档管理 | 上传 PDF / Markdown / TXT，列表查询，删除文档和对应向量 |
 | SQL 导入 | 后端连接关系型数据库，流式读取、清洗、切片、入库 |
@@ -139,21 +140,41 @@ classify
 
 - `build_rag_graph(vector_store, reranker=None, checkpointer=None)` 通过闭包注入向量库和重排器，不把不可序列化对象塞进 Graph State。
 - 默认使用 `MemorySaver` 做本地会话记忆，`RAGService` 使用 `session_id` 作为 LangGraph `thread_id`。
-- `retrieve` 只负责召回候选，不判断质量。
-- `rerank` 负责 CrossEncoder 重排；模型懒加载，推理通过 `asyncio.to_thread()` 避免阻塞事件循环。
+- `retrieve` 只负责召回候选，不判断质量；复杂问题的 `decomposition` 会把拆出的 `sub_queries` 写入 Graph State，并给候选片段标注 `source_sub_query`。
+- `rerank` 负责 CrossEncoder 重排；普通问题走单阶段重排，复杂问题在 `ENABLE_DEEP_COMPLEX_MODE=true` 且存在多个子问题时走“两阶段重排”：先按子问题独立 rerank，再用原问题做最终 rerank。
 - `retrieval_gate` 使用 [core/retrieval_quality.py](core/retrieval_quality.py) 的统一门控逻辑，只看 `rerank_score`，不再把 RRF 分数当作质量分。
+- `generate` 只有在门控通过后执行；复杂问题会先并行生成子答案，再通过 `synthesize_final_answer()` 合成最终回答。
 - `MAX_RETRIES` 默认 `2`，配置层会限制在 `0..2`。
 - SSE 流式响应中，Graph 任意节点异常都会发送 `error` 事件并最终发送 `done`，避免客户端永久等待。
 
-默认门控规则：
+门控阈值：
+
+| 复杂度 | top1 接受阈值 | 相关候选阈值 | 默认重试 |
+|--------|---------------|--------------|----------|
+| `simple` / `medium` | `0.60` | `0.50` | `MAX_RETRIES=2` |
+| `complex` | `0.45` | `0.35` | `COMPLEX_MAX_RETRIES=2` |
+
+默认门控动作：
 
 | 条件 | 动作 |
 |------|------|
 | 重排器不可用且 `RETRIEVAL_GATE_MODE=enforce` | `abstain` |
 | 无候选且仍有重试次数 | `retry` |
-| `top1_score >= 0.60` 且存在 `rerank_score >= 0.50` 候选 | `accept` |
+| 达到当前复杂度对应的 top1 与相关候选阈值 | `accept` |
 | 低分且仍有重试次数 | `retry` |
 | 重试耗尽 | `abstain` |
+
+复杂问题深度路径：
+
+```text
+decomposition retrieve
+  -> docs + sub_queries + source_sub_query
+  -> rerank(sub_query, docs_by_sub_query)
+  -> merge + rerank(original_query, merged_docs)
+  -> retrieval_gate
+  -> generate_sub_answers(sub_queries)
+  -> synthesize_final_answer(original_query, sub_answers, context_docs)
+```
 
 拒答文案：
 
@@ -314,6 +335,17 @@ curl -X POST http://localhost:8000/api/v1/documents/upload \
 | `RERANKER_RELEVANCE_THRESHOLD` | `0.50` | 候选相关性阈值 |
 | `RETRIEVAL_ACCEPT_TOP1_THRESHOLD` | `0.60` | top1 接受阈值 |
 | `RETRIEVAL_GATE_MODE` | `enforce` | `enforce` 强制门控，`observe` 观察放行 |
+| `MULTI_QUERY_VARIANTS` | `4` | 中等问题多查询改写数量 |
+| `DECOMPOSITION_MAX_SUB` | `4` | 复杂问题最多拆解出的子问题数量 |
+| `STRATEGY_TIMEOUT` | `10` | 多策略 LLM 调用超时，单位秒 |
+| `ENABLE_DEEP_COMPLEX_MODE` | `true` | 是否启用复杂问题两阶段重排和子答案合成 |
+| `SUB_RERANK_TOP_K` | `6` | 复杂问题第一阶段每个子问题保留的重排候选数 |
+| `COMPLEX_ACCEPT_TOP1_THRESHOLD` | `0.45` | 复杂问题 top1 接受阈值 |
+| `COMPLEX_RELEVANCE_THRESHOLD` | `0.35` | 复杂问题相关候选阈值 |
+| `COMPLEX_MAX_RETRIES` | `2` | 复杂问题最大检索重试次数，代码限制为 `0..2` |
+| `SUB_ANSWER_MAX_TOKENS` | `512` | 复杂问题子答案生成上限 |
+| `SYNTHESIS_MAX_TOKENS` | `4096` | 复杂问题最终合成回答上限 |
+| `COMPLEX_CONTEXT_TOP_K` | `8` | 复杂问题最终生成使用的上下文片段数 |
 | `MAX_RETRIES` | `2` | 检索重试次数，代码限制为 `0..2` |
 | `APP_HOST` | `0.0.0.0` | 服务监听地址 |
 | `APP_PORT` | `8000` | 服务端口 |
@@ -382,7 +414,7 @@ RAGAS 结果默认写入 `evaluation_records` 表，前端和 API 都能查看�
 }
 ```
 
-命令：
+仓库提供的是格式示例文件，真实评估前需要用当前向量库中的真实 `chunk_id` 创建自己的标注集，例如 `data/test_sets/retrieval_manual_v1.jsonl`。命令：
 
 ```bash
 python evaluation/cli.py retrieval-evaluate \
@@ -425,17 +457,20 @@ SQLite 主要表：
 
 ## 测试与验证
 
-核心测试命令：
+快速核心测试命令：
 
 ```bash
 ./edu-rag test
 ```
+
+`./edu-rag test` 会运行清洗、多策略检索、应用工厂/Markdown smoke 和项目 CLI 测试，适合日常快速自检。
 
 更完整的本地验证：
 
 ```bash
 .venv/bin/python test/test_cleaner.py --unit-only
 .venv/bin/python test/test_strategies.py --unit-only
+.venv/bin/python test/test_complex_question.py
 .venv/bin/python test/test_refactor_smoke.py
 .venv/bin/python test/test_retrieval_v1.py
 .venv/bin/python test/test_graph_v1.py
@@ -482,7 +517,7 @@ edu-rag/
 │   ├── retrieval_quality.py        # 检索门控
 │   ├── state.py                    # RAGState
 │   ├── stream_queue.py             # SSE token 队列注册表
-│   ├── nodes/                      # 分类、生成、闲聊、训练收集等节点
+│   ├── nodes/                      # 分类、检索、生成、子答案合成、闲聊等节点
 │   └── strategies/                 # multi-query、decomposition、HyDE、Step-Back
 ├── ingestion/                      # 文档加载、清洗、切片、入库流水线
 ├── evaluation/                     # RAGAS、检索评估、CLI

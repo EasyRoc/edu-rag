@@ -1,97 +1,96 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="520" viewBox="0 0 1120 520" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="680" viewBox="0 0 1240 680" role="img" aria-labelledby="title desc">
   <title id="title">Edu-RAG LangGraph 流程图</title>
-  <desc id="desc">展示当前 RAG Graph 从分类、检索、重排、门控到生成、拒答和重试的完整节点流转。</desc>
-  <defs>
-    <style>
-      .bg { fill: #fbfdff; }
-      .node { fill: #ffffff; stroke: #64748b; stroke-width: 1.4; rx: 10; }
-      .blue { fill: #e0f2fe; stroke: #0284c7; }
-      .green { fill: #dcfce7; stroke: #16a34a; }
-      .amber { fill: #fef3c7; stroke: #d97706; }
-      .red { fill: #fee2e2; stroke: #dc2626; }
-      .purple { fill: #ede9fe; stroke: #7c3aed; }
-      .title { font: 700 16px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; fill: #0f172a; }
-      .text { font: 13px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; fill: #334155; }
-      .small { font: 12px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; fill: #64748b; }
-      .edge { stroke: #334155; stroke-width: 1.8; fill: none; marker-end: url(#arrow); }
-      .retry { stroke: #d97706; stroke-width: 2; fill: none; marker-end: url(#arrow-amber); stroke-dasharray: 7 5; }
-      .label { font: 12px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; fill: #0f172a; }
-    </style>
-    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/>
-    </marker>
-    <marker id="arrow-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="#d97706"/>
-    </marker>
-  </defs>
+  <desc id="desc">展示当前 RAG Graph 从分类、检索、重排、门控、生成、拒答到重试的完整节点流转，并突出复杂问题的两阶段重排与子答案合成路径。</desc>
 
-  <rect class="bg" x="0" y="0" width="1120" height="520"/>
+  <rect x="0" y="0" width="1240" height="680" fill="#fbfdff"/>
 
-  <rect class="node blue" x="42" y="190" width="126" height="74"/>
-  <text class="title" x="72" y="218">classify</text>
-  <text class="small" x="61" y="241">意图 + 复杂度</text>
+  <text x="40" y="42" font-family="Arial, sans-serif" font-size="22" font-weight="700" fill="#0f172a">Edu-RAG RAG Graph</text>
+  <text x="40" y="68" font-family="Arial, sans-serif" font-size="13" fill="#475569">主流程保持稳定；复杂问题在 rerank 和 generate 内部启用深度处理分支。</text>
 
-  <rect class="node" x="240" y="64" width="126" height="74"/>
-  <text class="title" x="277" y="92">chitchat</text>
-  <text class="small" x="262" y="115">非教育问题</text>
+  <rect x="42" y="158" width="128" height="76" rx="10" fill="#e0f2fe" stroke="#0284c7" stroke-width="1.5"/>
+  <text x="75" y="187" font-family="Arial, sans-serif" font-size="16" font-weight="700" fill="#0f172a">classify</text>
+  <text x="63" y="211" font-family="Arial, sans-serif" font-size="12" fill="#334155">意图 + 复杂度</text>
 
-  <rect class="node green" x="240" y="190" width="126" height="74"/>
-  <text class="title" x="278" y="218">retrieve</text>
-  <text class="small" x="257" y="241">混合召回候选</text>
+  <rect x="244" y="64" width="128" height="76" rx="10" fill="#ffffff" stroke="#64748b" stroke-width="1.5"/>
+  <text x="281" y="93" font-family="Arial, sans-serif" font-size="16" font-weight="700" fill="#0f172a">chitchat</text>
+  <text x="267" y="117" font-family="Arial, sans-serif" font-size="12" fill="#64748b">非教育问题</text>
 
-  <rect class="node green" x="432" y="190" width="126" height="74"/>
-  <text class="title" x="466" y="218">rerank</text>
-  <text class="small" x="446" y="241">CrossEncoder</text>
+  <rect x="244" y="158" width="128" height="76" rx="10" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+  <text x="283" y="187" font-family="Arial, sans-serif" font-size="16" font-weight="700" fill="#0f172a">retrieve</text>
+  <text x="258" y="211" font-family="Arial, sans-serif" font-size="12" fill="#334155">混合召回候选</text>
 
-  <rect class="node amber" x="624" y="178" width="146" height="98"/>
-  <text class="title" x="642" y="211">retrieval_gate</text>
-  <text class="small" x="641" y="235">只读 rerank_score</text>
-  <text class="small" x="649" y="253">accept / retry / abstain</text>
+  <rect x="440" y="158" width="142" height="76" rx="10" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+  <text x="478" y="187" font-family="Arial, sans-serif" font-size="16" font-weight="700" fill="#0f172a">rerank</text>
+  <text x="456" y="211" font-family="Arial, sans-serif" font-size="12" fill="#334155">CrossEncoder</text>
 
-  <rect class="node green" x="842" y="64" width="126" height="74"/>
-  <text class="title" x="872" y="92">generate</text>
-  <text class="small" x="854" y="115">门控通过才生成</text>
+  <rect x="656" y="146" width="154" height="100" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/>
+  <text x="675" y="179" font-family="Arial, sans-serif" font-size="16" font-weight="700" fill="#0f172a">retrieval_gate</text>
+  <text x="676" y="203" font-family="Arial, sans-serif" font-size="12" fill="#334155">只读 rerank_score</text>
+  <text x="683" y="223" font-family="Arial, sans-serif" font-size="12" fill="#334155">accept / retry / abstain</text>
 
-  <rect class="node red" x="842" y="190" width="126" height="74"/>
-  <text class="title" x="878" y="218">abstain</text>
-  <text class="small" x="858" y="241">低质量证据拒答</text>
+  <rect x="892" y="64" width="132" height="76" rx="10" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+  <text x="925" y="93" font-family="Arial, sans-serif" font-size="16" font-weight="700" fill="#0f172a">generate</text>
+  <text x="906" y="117" font-family="Arial, sans-serif" font-size="12" fill="#334155">门控通过才生成</text>
 
-  <rect class="node amber" x="842" y="336" width="126" height="86"/>
-  <text class="title" x="862" y="365">retry_planner</text>
-  <text class="small" x="859" y="389">query variants</text>
-  <text class="small" x="872" y="405">HyDE / Step-Back</text>
+  <rect x="892" y="158" width="132" height="76" rx="10" fill="#fee2e2" stroke="#dc2626" stroke-width="1.5"/>
+  <text x="931" y="187" font-family="Arial, sans-serif" font-size="16" font-weight="700" fill="#0f172a">abstain</text>
+  <text x="909" y="211" font-family="Arial, sans-serif" font-size="12" fill="#334155">低质量证据拒答</text>
 
-  <rect class="node purple" x="1008" y="190" width="86" height="74"/>
-  <text class="title" x="1025" y="218">finalize</text>
-  <text class="small" x="1026" y="241">会话历史</text>
+  <rect x="892" y="306" width="132" height="86" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/>
+  <text x="913" y="334" font-family="Arial, sans-serif" font-size="16" font-weight="700" fill="#0f172a">retry_planner</text>
+  <text x="912" y="359" font-family="Arial, sans-serif" font-size="12" fill="#334155">query variants</text>
+  <text x="922" y="377" font-family="Arial, sans-serif" font-size="12" fill="#334155">HyDE / Step-Back</text>
 
-  <path class="edge" d="M 168 227 L 240 227"/>
-  <text class="label" x="184" y="214">educational</text>
-  <path class="edge" d="M 105 190 C 118 106 163 101 240 101"/>
-  <text class="label" x="135" y="112">non-educational</text>
-  <path class="edge" d="M 366 227 L 432 227"/>
-  <path class="edge" d="M 558 227 L 624 227"/>
-  <path class="edge" d="M 770 205 C 804 139 824 101 842 101"/>
-  <text class="label" x="785" y="142">accept</text>
-  <path class="edge" d="M 770 227 L 842 227"/>
-  <text class="label" x="788" y="216">abstain</text>
-  <path class="retry" d="M 697 276 C 700 371 775 379 842 379"/>
-  <text class="label" x="722" y="364">retry</text>
-  <path class="retry" d="M 842 379 C 565 474 297 403 303 264"/>
-  <text class="label" x="526" y="438">统一回到 retrieve，不走旁路</text>
-  <path class="edge" d="M 968 101 C 1000 101 1017 145 1039 190"/>
-  <path class="edge" d="M 968 227 L 1008 227"/>
-  <path class="edge" d="M 366 101 C 698 101 736 227 1008 227"/>
+  <rect x="1100" y="158" width="98" height="76" rx="10" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="1125" y="187" font-family="Arial, sans-serif" font-size="16" font-weight="700" fill="#0f172a">finalize</text>
+  <text x="1126" y="211" font-family="Arial, sans-serif" font-size="12" fill="#334155">会话历史</text>
 
-  <rect class="node" x="42" y="336" width="260" height="116"/>
-  <text class="title" x="62" y="365">门控规则摘要</text>
-  <text class="text" x="62" y="392">top1 ≥ 0.60 且有候选 ≥ 0.50 → accept</text>
-  <text class="text" x="62" y="416">无候选 / 低分 / 重排不可用 → retry 或 abstain</text>
-  <text class="text" x="62" y="440">RRF 只做候选排序，不做质量判断</text>
+  <line x1="170" y1="196" x2="244" y2="196" stroke="#334155" stroke-width="3"/>
+  <text x="188" y="184" font-family="Arial, sans-serif" font-size="12" fill="#0f172a">educational</text>
+  <line x1="106" y1="158" x2="244" y2="102" stroke="#334155" stroke-width="3"/>
+  <text x="132" y="101" font-family="Arial, sans-serif" font-size="12" fill="#0f172a">non-educational</text>
+  <line x1="372" y1="196" x2="440" y2="196" stroke="#334155" stroke-width="3"/>
+  <line x1="582" y1="196" x2="656" y2="196" stroke="#334155" stroke-width="3"/>
+  <line x1="810" y1="172" x2="892" y2="102" stroke="#334155" stroke-width="3"/>
+  <text x="830" y="121" font-family="Arial, sans-serif" font-size="12" fill="#0f172a">accept</text>
+  <line x1="810" y1="196" x2="892" y2="196" stroke="#334155" stroke-width="3"/>
+  <text x="830" y="185" font-family="Arial, sans-serif" font-size="12" fill="#0f172a">abstain</text>
+  <polyline points="733,246 760,300 892,349" stroke="#d97706" stroke-width="3" stroke-dasharray="7 5" fill="none"/>
+  <text x="762" y="332" font-family="Arial, sans-serif" font-size="12" fill="#0f172a">retry</text>
+  <polyline points="892,349 600,438 308,234" stroke="#d97706" stroke-width="3" stroke-dasharray="7 5" fill="none"/>
+  <text x="548" y="420" font-family="Arial, sans-serif" font-size="12" fill="#0f172a">统一回到 retrieve，不走旁路</text>
+  <line x1="1024" y1="102" x2="1134" y2="158" stroke="#334155" stroke-width="3"/>
+  <line x1="1024" y1="196" x2="1100" y2="196" stroke="#334155" stroke-width="3"/>
+  <polyline points="372,102 720,102 1100,196" stroke="#334155" stroke-width="3" fill="none"/>
 
-  <rect class="node" x="352" y="336" width="260" height="116"/>
-  <text class="title" x="372" y="365">重试策略</text>
-  <text class="text" x="372" y="392">第 1 次：原问题 + 去重 query variants</text>
-  <text class="text" x="372" y="416">第 2 次：按原因选择 HyDE 或 Step-Back</text>
-  <text class="text" x="372" y="440">MAX_RETRIES 默认限制在 0..2</text>
+  <rect x="40" y="472" width="344" height="150" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+  <text x="62" y="501" font-family="Arial, sans-serif" font-size="16" font-weight="700" fill="#0f172a">统一门控规则</text>
+  <text x="62" y="528" font-family="Arial, sans-serif" font-size="13" fill="#334155">default: top1 &gt;= 0.60 且相关候选 &gt;= 0.50</text>
+  <text x="62" y="552" font-family="Arial, sans-serif" font-size="13" fill="#334155">complex: top1 &gt;= 0.45 且相关候选 &gt;= 0.35</text>
+  <text x="62" y="576" font-family="Arial, sans-serif" font-size="13" fill="#334155">无候选、低分、重排不可用 -> retry 或 abstain</text>
+  <text x="62" y="600" font-family="Arial, sans-serif" font-size="13" fill="#334155">RRF 只做候选排序，不做质量判断</text>
+
+  <rect x="424" y="472" width="344" height="150" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+  <text x="446" y="501" font-family="Arial, sans-serif" font-size="16" font-weight="700" fill="#0f172a">重试策略</text>
+  <text x="446" y="528" font-family="Arial, sans-serif" font-size="13" fill="#334155">第 1 次：原问题 + 最多 3 个去重 query variants</text>
+  <text x="446" y="552" font-family="Arial, sans-serif" font-size="13" fill="#334155">第 2 次：按门控原因选择 HyDE 或 Step-Back</text>
+  <text x="446" y="576" font-family="Arial, sans-serif" font-size="13" fill="#334155">所有重试统一经过 retrieve -> rerank -> gate</text>
+  <text x="446" y="600" font-family="Arial, sans-serif" font-size="13" fill="#334155">MAX_RETRIES 默认限制在 0..2</text>
+
+  <rect x="806" y="454" width="392" height="184" rx="12" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="830" y="483" font-family="Arial, sans-serif" font-size="16" font-weight="700" fill="#0f172a">复杂问题深度路径</text>
+  <rect x="830" y="506" width="112" height="52" rx="8" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.2"/>
+  <text x="849" y="528" font-family="Arial, sans-serif" font-size="12" fill="#334155">sub_queries</text>
+  <text x="847" y="546" font-family="Arial, sans-serif" font-size="12" fill="#334155">source_sub_query</text>
+  <rect x="976" y="506" width="176" height="52" rx="8" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.2"/>
+  <text x="1000" y="528" font-family="Arial, sans-serif" font-size="12" fill="#334155">两阶段 rerank</text>
+  <text x="996" y="546" font-family="Arial, sans-serif" font-size="12" fill="#334155">子问题 -> 原问题</text>
+  <rect x="830" y="580" width="142" height="40" rx="8" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.2"/>
+  <text x="853" y="605" font-family="Arial, sans-serif" font-size="12" fill="#334155">并行生成子答案</text>
+  <rect x="1008" y="580" width="144" height="40" rx="8" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.2"/>
+  <text x="1033" y="605" font-family="Arial, sans-serif" font-size="12" fill="#334155">合成最终答案</text>
+  <line x1="942" y1="532" x2="976" y2="532" stroke="#7c3aed" stroke-width="3"/>
+  <polyline points="1064,558 1064,576 972,600" stroke="#7c3aed" stroke-width="3" fill="none"/>
+  <line x1="972" y1="600" x2="1008" y2="600" stroke="#7c3aed" stroke-width="3"/>
+  <text x="830" y="650" font-family="Menlo, Consolas, monospace" font-size="12" fill="#334155">ENABLE_DEEP_COMPLEX_MODE=true</text>
 </svg>
