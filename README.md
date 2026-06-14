@@ -6,6 +6,8 @@ Edu-RAG 是一个面向 K12 教材、教辅和校本资料的本地 RAG 系统�
 
 ![Edu-RAG 系统架构](docs/assets/edu-rag-architecture.svg)
 
+> 新人上手建议先阅读 [系统流程文档](docs/system-flow.md)，涵盖离线入库、在线检索问答、RAGAS 评估体系的完整流程与代码索引。
+
 ---
 
 ## 目录
