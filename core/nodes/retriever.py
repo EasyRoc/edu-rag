@@ -131,6 +131,10 @@ async def _decomposition_retrieve(
         for doc in docs:
             doc["source_sub_query"] = item
         results.append(docs)
+    # 合并各子问题检索结果 → 打上 strategy 标签 → 连同子问题列表一起返回
+    # merge_sub_results: N组结果按 score 去重排序截到 limit
+    # _annotate: 给每个 doc 标记 retrieval_strategy / query_variant，供后续评估切片
+    # sub_queries: 写入 state，供 rerank(子问题感知重排) 和 gate(覆盖检查) 使用
     return _annotate(merge_sub_results(results, limit), StrategyType.DECOMPOSITION.value, query), sub_queries
 
 
