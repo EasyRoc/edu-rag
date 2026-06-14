@@ -6,7 +6,7 @@ RRF 只决定候选顺序，最终能否生成答案由重排分数决定。
 
 from __future__ import annotations
 
-from typing import Literal, TypedDict
+from typing import Literal, NotRequired, TypedDict
 
 from config import settings
 from utils.logger import logger
@@ -20,6 +20,11 @@ class RetrievalMetrics(TypedDict):
     topk_mean_score: float
     top1_margin: float
     coverage_ratio: float | None
+    total_subquery_count: int
+    covered_subquery_count: int
+    missing_subqueries: list[str]
+    weak_subqueries: list[str]
+    subquery_metrics: list[dict]
 
 
 class RetrievalDecision(TypedDict):
@@ -27,12 +32,15 @@ class RetrievalDecision(TypedDict):
     reason_codes: list[str]
     metrics: RetrievalMetrics
     suggested_strategy: str | None
+    suggested_plan: NotRequired[dict | None]
 
 
 def compute_retrieval_metrics(
     docs: list[dict],
     *,
     relevant_threshold: float | None = None,
+    sub_queries: list[str] | None = None,
+    subquery_top1_threshold: float | None = None,
 ) -> RetrievalMetrics:
     """基于归一化重排分数计算门控指标。
 
@@ -52,8 +60,8 @@ def compute_retrieval_metrics(
     │ top1_margin         │ top1 与 top2 的分数差，                             │
     │                     │ 差值越大说明 top1 是“碾压式胜出”，答案唯一性越高；     │
     │                     │ 差值越小说明多个文档争第一，答案可能非唯一              │
-    │ coverage_ratio     │ 暂未启用（预留字段，用于衡量检索覆盖了知识库中多少       │
-    │                     │ 相关知识片段）                                      │
+    │ coverage_ratio     │ 复杂问题中已覆盖子问题数 / 总子问题数；               │
+    │                     │ 简单问题或未传子问题时为 None                        │
     └────────────────────┴──────────────────────────────────────────────────┘
     """
     threshold = (
@@ -69,10 +77,19 @@ def compute_retrieval_metrics(
     top_scores = scores[:5]
     # 按 doc_id 去重，避免同一段内容被多次切块后霸占 topK
     distinct_docs = {
-        str(doc.get("doc_id") or doc.get("id"))
+        _doc_identity(doc)
         for doc in docs
-        if doc.get("doc_id") is not None or doc.get("id") is not None
+        if _doc_identity(doc)
     }
+    clean_sub_queries = _dedupe_texts(sub_queries or [])
+    subquery_metrics = _compute_subquery_metrics(
+        docs,
+        sub_queries=clean_sub_queries,
+        relevant_threshold=threshold,
+        top1_threshold=subquery_top1_threshold or threshold,
+    )
+    covered_count = sum(1 for item in subquery_metrics if item["status"] == "covered")
+    total_subquery_count = len(subquery_metrics)
     return {
         "candidate_count": len(docs),
         "relevant_count": sum(score >= threshold for score in scores),
@@ -81,7 +98,16 @@ def compute_retrieval_metrics(
         "topk_mean_score": sum(top_scores) / len(top_scores) if top_scores else 0.0,
         # top1_margin: 只有1条文档时 = 自身分数；0条 = 0.0
         "top1_margin": scores[0] - scores[1] if len(scores) > 1 else (scores[0] if scores else 0.0),
-        "coverage_ratio": None,  # 预留，后续可基于 chunk 总量计算覆盖率
+        "coverage_ratio": covered_count / total_subquery_count if total_subquery_count else None,
+        "total_subquery_count": total_subquery_count,
+        "covered_subquery_count": covered_count,
+        "missing_subqueries": [
+            item["query"] for item in subquery_metrics if item["status"] == "missing"
+        ],
+        "weak_subqueries": [
+            item["query"] for item in subquery_metrics if item["status"] == "weak"
+        ],
+        "subquery_metrics": subquery_metrics,
     }
 
 
@@ -95,6 +121,7 @@ def evaluate_retrieval_gate(
     relevant_threshold: float | None = None,
     accept_top1_threshold: float | None = None,
     complexity: str = "medium",
+    sub_queries: list[str] | None = None,
 ) -> RetrievalDecision:
     """在线检索质量门控 —— 决定检回来的文档能不能用、要不要重试、还是放弃回答。
 
@@ -103,7 +130,7 @@ def evaluate_retrieval_gate(
     - retry:  质量不够但有重试配额，换策略重新检索
     - abstain: 质量不够且重试次数用尽，放弃回答（拒答）
 
-    决策流程（四个分支，从上到下短路判断）：
+    决策流程（五个分支，从上到下短路判断）：
     ┌─────────────────────────────────────────────────────────────────┐
     │ 1. 没召回任何文档                                                │
     │    → 有重试配额？retry（建议用 HyDE 策略重新检索）                  │
@@ -113,10 +140,14 @@ def evaluate_retrieval_gate(
     │    → observe 模式：accept（只记录，不阻断，线上观察用）              │
     │    → enforce 模式：abstain（严格模式，宁可拒答也不给不可靠的结果）    │
     ├─────────────────────────────────────────────────────────────────┤
-    │ 3. 质量达标：top1 分数 >= 门限 且 至少1条相关文档                  │
+    │ 3. 复杂问题子问题覆盖不足：某个 sub_query 没有达标证据              │
+    │    → 有重试配额？retry（建议 complex_repair 定向修复）              │
+    │    → 没配额？abstain                                             │
+    ├─────────────────────────────────────────────────────────────────┤
+    │ 4. 质量达标：top1 分数 >= 门限 且 至少1条相关文档                  │
     │    → accept                                                     │
     ├─────────────────────────────────────────────────────────────────┤
-    │ 4. 质量不达标（走到这说明 1/2/3 都不满足）                         │
+    │ 5. 质量不达标（走到这说明 1/2/3/4 都不满足）                       │
     │    → 有重试配额？retry                                           │
     │       · 无相关文档   → 建议 HyDE（生成假设答案来检索）              │
     │       · 有文档但分低  → 建议 step_back（回溯到更宽泛的查询）        │
@@ -137,7 +168,14 @@ def evaluate_retrieval_gate(
     relevant_min = default_relevant if relevant_threshold is None else relevant_threshold
     # top1 文档直接放行的最低分数（远高于 relevant_min，确保领头文档足够可靠）
     top1_min = default_top1 if accept_top1_threshold is None else accept_top1_threshold
-    metrics = compute_retrieval_metrics(docs, relevant_threshold=relevant_min)
+    clean_sub_queries = _dedupe_texts(sub_queries or [])
+    use_subquery_gate = complexity == "complex" and len(clean_sub_queries) >= 2
+    metrics = compute_retrieval_metrics(
+        docs,
+        relevant_threshold=relevant_min,
+        sub_queries=clean_sub_queries if use_subquery_gate else None,
+        subquery_top1_threshold=top1_min,
+    )
 
     # ── 分支 1: 空召回 ──
     if not docs:
@@ -148,6 +186,7 @@ def evaluate_retrieval_gate(
             "reason_codes": ["no_candidates"],
             "metrics": metrics,
             "suggested_strategy": "hyde",  # 空召回尝试生成假设答案来增强检索
+            "suggested_plan": _build_complex_repair_plan(metrics) if use_subquery_gate else None,
         }
 
     # ── 分支 2: 重排器不可用，无法做质量判断 ──
@@ -165,10 +204,34 @@ def evaluate_retrieval_gate(
             "reason_codes": ["reranker_unavailable", "would_abstain"] if mode == "observe" else ["reranker_unavailable"],
             "metrics": metrics,
             "suggested_strategy": None,
+            "suggested_plan": None,
         }
 
-    # ── 分支 3: 质量达标，直接放行 ──
-    # top1_min（0.60）> relevant_min（0.50），所以 top1 >= 0.60 时 relevant_count 必然 >= 1
+    # ── 分支 3: 复杂问题必须覆盖每个子问题 ──
+    if use_subquery_gate and metrics["covered_subquery_count"] < metrics["total_subquery_count"]:
+        action = "retry" if retry_count < max_retries else "abstain"
+        reasons = ["subquery_coverage_low"]
+        if metrics["missing_subqueries"]:
+            reasons.append("missing_subqueries")
+        if metrics["weak_subqueries"]:
+            reasons.append("weak_subqueries")
+        logger.info(
+            "检索门控: action=%s, reasons=%s, subquery_coverage=%d/%d",
+            action,
+            ",".join(reasons),
+            metrics["covered_subquery_count"],
+            metrics["total_subquery_count"],
+        )
+        return {
+            "action": action,
+            "reason_codes": reasons,
+            "metrics": metrics,
+            "suggested_strategy": "hyde" if metrics["missing_subqueries"] else "step_back",
+            "suggested_plan": _build_complex_repair_plan(metrics),
+        }
+
+    # ── 分支 4: 质量达标，直接放行 ──
+    # 默认阈值满足 top1_min > relevant_min，所以 top1 达标时至少有一条相关候选。
     if metrics["top1_score"] >= top1_min:
         logger.info(
             "检索门控: action=accept, top1=%.4f, relevant_count=%d",
@@ -180,9 +243,10 @@ def evaluate_retrieval_gate(
             "reason_codes": ["quality_passed"],
             "metrics": metrics,
             "suggested_strategy": None,
+            "suggested_plan": None,
         }
 
-    # ── 分支 4: 质量不达标 ──
+    # ── 分支 5: 质量不达标 ──
     reasons = []
     if metrics["relevant_count"] == 0:
         reasons.append("no_relevant_docs")   # 所有文档 rerank 分都低于相关阈值
@@ -203,4 +267,99 @@ def evaluate_retrieval_gate(
         # 全部不相关 → 原始查询词可能没命中，用 HyDE 生成假设答案来拉回相关文档
         # 文档存在但分低 → 查询范围太窄/表达不匹配，用 step_back 回溯到更宽泛的概念
         "suggested_strategy": "hyde" if metrics["relevant_count"] == 0 else "step_back",
+        "suggested_plan": _build_complex_repair_plan(metrics) if use_subquery_gate else None,
+    }
+
+
+def _dedupe_texts(items: list[str]) -> list[str]:
+    """按出现顺序去重，避免同一子问题重复拉低覆盖率。"""
+    results: list[str] = []
+    for item in items:
+        text = str(item).strip()
+        if text and text not in results:
+            results.append(text)
+    return results
+
+
+def _doc_identity(doc: dict) -> str:
+    """统一文档身份字段，避免缺少 id 时把不同片段算作同一条。"""
+    for key in ("doc_id", "id", "chunk_id"):
+        value = doc.get(key)
+        if value is not None:
+            return f"{key}:{value}"
+    text = str(doc.get("text") or doc.get("content") or "")
+    if text:
+        return f"text:{text[:200]}"
+    return ""
+
+
+def _source_matches_query(source: str, query: str) -> bool:
+    if not source or not query:
+        return False
+    parts = [item.strip() for item in source.split(";") if item.strip()]
+    return query in parts or query in source
+
+
+def _score_summary(docs: list[dict]) -> tuple[list[float], float, float]:
+    scores = sorted(
+        [float(doc["rerank_score"]) for doc in docs if doc.get("rerank_score") is not None],
+        reverse=True,
+    )
+    top_scores = scores[:5]
+    return scores, scores[0] if scores else 0.0, sum(top_scores) / len(top_scores) if top_scores else 0.0
+
+
+def _compute_subquery_metrics(
+    docs: list[dict],
+    *,
+    sub_queries: list[str],
+    relevant_threshold: float,
+    top1_threshold: float,
+) -> list[dict]:
+    """计算每个子问题自己的候选质量，用于复杂问题覆盖门控。"""
+    results: list[dict] = []
+    for query in sub_queries:
+        query_docs = [
+            doc
+            for doc in docs
+            if _source_matches_query(str(doc.get("source_sub_query", "")), query)
+        ]
+        scores, top1_score, topk_mean_score = _score_summary(query_docs)
+        relevant_count = sum(score >= relevant_threshold for score in scores)
+        if relevant_count == 0:
+            status = "missing"
+            repair = "hyde"
+        elif top1_score < top1_threshold:
+            status = "weak"
+            repair = "step_back"
+        else:
+            status = "covered"
+            repair = "direct"
+        results.append(
+            {
+                "query": query,
+                "candidate_count": len(query_docs),
+                "relevant_count": relevant_count,
+                "top1_score": top1_score,
+                "topk_mean_score": topk_mean_score,
+                "status": status,
+                "repair": repair,
+            }
+        )
+    return results
+
+
+def _build_complex_repair_plan(metrics: RetrievalMetrics) -> dict:
+    """把子问题质量诊断转换成 retry_planner 可执行的修复计划。"""
+    return {
+        "strategy": "complex_repair",
+        "sub_queries": [item["query"] for item in metrics["subquery_metrics"]],
+        "subqueries": [
+            {
+                "query": item["query"],
+                "status": item["status"],
+                "repair": item["repair"],
+            }
+            for item in metrics["subquery_metrics"]
+        ],
     }

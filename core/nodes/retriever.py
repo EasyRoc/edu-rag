@@ -139,33 +139,41 @@ async def build_retry_plan(
     query: str,
     next_retry_count: int,
     decision: dict,
+    complexity: str = "medium",
+    sub_queries: list[str] | None = None,
 ) -> dict:
     """根据门控失败原因规划下一轮纠正检索。
 
-    渐进式重试 —— 第一次盲扩，后面对症下药：
-
-    初始检索失败（策略由 select_strategy 按复杂度选择）
-        │
-        ▼
-    【重试1 — query_variants】盲扩
-        原因：还不知道为什么失败，先换几种问法试试覆盖面
-        手段：生成3个同义改写变体，原始 query + 变体多路同时检索后 RRF 融合
-        │
-        ├── 成了 → 放行
-        │
-        └── 又败了 → 门控已经诊断出原因
-                        │
-                        ▼
-                  【重试2 — 对症下药】
-
-                  relevant_count == 0  → hyde
-                    所有文档都不相关，说明查询词和知识库的表达方式不匹配
-                    → 生成假设答案，用答案文本去检索（答案用词更贴近知识库）
-
-                  top1_score 低       → step_back
-                    有文档但质量不够，说明查询太窄或太具体
-                    → 回溯到更宽泛的概念（浮力公式推导 → 浮力原理）
+    普通问题沿用渐进式重试：第一次 query variants 盲扩，第二次根据门控
+    建议选择 HyDE 或 Step-Back。复杂问题如果携带多个 `sub_queries`，则优先
+    执行门控给出的 `complex_repair` 计划，按子问题分别 direct / hyde /
+    step_back 修复，避免重试后丢失两阶段重排与子答案合成能力。
     """
+    clean_sub_queries = _dedupe_queries(sub_queries or [])
+    suggested_plan = decision.get("suggested_plan")
+    if complexity == "complex" and len(clean_sub_queries) >= 2:
+        if suggested_plan and suggested_plan.get("strategy") == "complex_repair":
+            plan = _normalize_complex_repair_plan(suggested_plan, clean_sub_queries)
+        else:
+            fallback_repair = (
+                "query_variants"
+                if next_retry_count == 1
+                else decision.get("suggested_strategy") or "step_back"
+            )
+            plan = _normalize_complex_repair_plan(
+                {
+                    "strategy": "complex_repair",
+                    "subqueries": [
+                        {"query": item, "status": "unknown", "repair": fallback_repair}
+                        for item in clean_sub_queries
+                    ],
+                },
+                clean_sub_queries,
+            )
+        plan["queries"] = [query]
+        logger.info("生成复杂问题纠正检索计划: %s", plan)
+        return plan
+
     if next_retry_count == 1:
         # 第一次重试：盲扩——还不知道失败原因，用多查询变体扩大覆盖面
         variants = await generate_query_variants(query, n=3)
@@ -218,6 +226,63 @@ async def _retrieve_from_plan(
     return _annotate(multi_query_fusion(results, top_k), strategy, query)
 
 
+async def _retrieve_complex_repair(
+    vector_store: K12VectorStore,
+    *,
+    plan: dict,
+    subject: str | None,
+    grade: str | None,
+    top_k: int,
+) -> tuple[list[dict], list[str]]:
+    """复杂问题纠正检索：按子问题分别修复，再保留子问题来源合并。"""
+    sub_plans = list(plan.get("subqueries") or [])
+    sub_queries = _dedupe_queries(plan.get("sub_queries") or [item.get("query", "") for item in sub_plans])
+    if not sub_plans:
+        sub_plans = [
+            {"query": item, "status": "unknown", "repair": "direct"}
+            for item in sub_queries
+        ]
+    per_sub_top_k = max(3, top_k // max(len(sub_plans), 1))
+    per_sub_results: list[list[dict]] = []
+
+    for sub_plan in sub_plans:
+        sub_query = str(sub_plan.get("query", "")).strip()
+        if not sub_query:
+            continue
+        repair = str(sub_plan.get("repair") or "direct")
+        search_queries = await _build_repair_queries(sub_query, repair)
+        query_results = []
+        for search_query in search_queries:
+            docs = _search(
+                vector_store,
+                query=search_query,
+                subject=subject,
+                grade=grade,
+                top_k=per_sub_top_k,
+                strategy="complex_repair",
+            )
+            for doc in docs:
+                doc["source_sub_query"] = sub_query
+                doc["query_variant"] = search_query
+                doc["retry_repair_strategy"] = repair
+            query_results.append(docs)
+        fused = multi_query_fusion(query_results, per_sub_top_k) if len(query_results) > 1 else (query_results[0] if query_results else [])
+        for doc in fused:
+            doc["source_sub_query"] = sub_query
+            doc["retrieval_strategy"] = "complex_repair"
+            doc["retry_repair_strategy"] = repair
+        per_sub_results.append(fused)
+
+    docs = merge_sub_results(per_sub_results, top_k)
+    logger.info(
+        "复杂纠正检索完成: sub_queries=%d, sub_plans=%d, candidates=%d",
+        len(sub_queries),
+        len(sub_plans),
+        len(docs),
+    )
+    return docs, sub_queries
+
+
 async def hybrid_retrieve(
     vector_store: K12VectorStore,
     query: str,
@@ -232,6 +297,14 @@ async def hybrid_retrieve(
     """召回候选文档；在线质量判断会在重排后完成。"""
     limit = candidate_top_k or settings.RETRIEVAL_CANDIDATE_TOP_K
     plan = retrieval_plan or {"strategy": "initial", "queries": [query]}
+    if plan.get("strategy") == "complex_repair":
+        return await _retrieve_complex_repair(
+            vector_store,
+            plan=plan,
+            subject=subject,
+            grade=grade,
+            top_k=limit,
+        )
     if plan.get("strategy") != "initial":
         docs = await _retrieve_from_plan(
             vector_store,
@@ -256,3 +329,56 @@ async def hybrid_retrieve(
         )
     logger.info("检索候选完成: strategy=%s, count=%d", strategy.value, len(docs))
     return docs, sub_queries
+
+
+def _dedupe_queries(items: list[str]) -> list[str]:
+    results: list[str] = []
+    for item in items:
+        query = str(item).strip()
+        if query and query not in results:
+            results.append(query)
+    return results
+
+
+def _normalize_complex_repair_plan(plan: dict, sub_queries: list[str]) -> dict:
+    """补齐复杂修复计划，确保每个子问题都有明确 repair 动作。"""
+    by_query = {
+        str(item.get("query", "")).strip(): dict(item)
+        for item in plan.get("subqueries", [])
+        if str(item.get("query", "")).strip()
+    }
+    normalized_subqueries = []
+    for query in sub_queries:
+        item = by_query.get(query, {"query": query, "status": "unknown", "repair": "direct"})
+        repair = item.get("repair") or "direct"
+        if repair not in {"direct", "query_variants", "hyde", "step_back"}:
+            repair = "step_back"
+        normalized_subqueries.append(
+            {
+                "query": query,
+                "status": item.get("status", "unknown"),
+                "repair": repair,
+            }
+        )
+    return {
+        "strategy": "complex_repair",
+        "sub_queries": sub_queries,
+        "subqueries": normalized_subqueries,
+    }
+
+
+async def _build_repair_queries(query: str, repair: str) -> list[str]:
+    """根据修复类型生成实际检索语句，始终保留原子问题兜底。"""
+    candidates = [query]
+    if repair == "hyde":
+        hypothetical = await generate_hypothetical_answer(query)
+        if hypothetical:
+            candidates.append(hypothetical)
+    elif repair == "step_back":
+        step_back = await generate_step_back_query(query)
+        if step_back:
+            candidates.append(step_back)
+    elif repair == "query_variants":
+        variants = await generate_query_variants(query, n=2)
+        candidates.extend(variants)
+    return _dedupe_queries(candidates)

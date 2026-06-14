@@ -183,6 +183,7 @@ async def retrieval_gate_node(state: RAGState) -> dict:
         max_retries=state.get("max_retries", settings.MAX_RETRIES),
         reranker_available=state.get("reranker_available", False),
         complexity=state.get("complexity", "medium"),
+        sub_queries=state.get("sub_queries", []),
     )
     attempt = {
         "retry_count": state.get("retry_count", 0),
@@ -216,6 +217,8 @@ async def retry_planner_node(state: RAGState) -> dict:
         query=state["query"],
         next_retry_count=next_retry,
         decision=state.get("retrieval_decision", {}),
+        complexity=state.get("complexity", "medium"),
+        sub_queries=state.get("sub_queries", []),
     )
     logger.info("retry_planner: retry=%d, plan=%s", next_retry, plan)
     return {"retry_count": next_retry, "retrieval_plan": plan}

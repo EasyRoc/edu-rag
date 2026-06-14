@@ -47,10 +47,10 @@ def merge_sub_results(sub_results: list[list[dict]], top_k: int) -> list[dict]:
     if not sub_results:
         return []
 
-    seen: dict[int, dict] = {}
+    seen: dict[str, dict] = {}
     for result_list in sub_results:
         for doc in result_list:
-            chunk_key = doc.get("id", 0)
+            chunk_key = _doc_key(doc)
             new_source = doc.get("source_sub_query", "")
             if chunk_key not in seen:
                 seen[chunk_key] = dict(doc)
@@ -58,7 +58,7 @@ def merge_sub_results(sub_results: list[list[dict]], top_k: int) -> list[dict]:
 
             existing = seen[chunk_key]
             existing_source = existing.get("source_sub_query", "")
-            if doc["score"] > existing["score"]:
+            if _doc_score(doc) > _doc_score(existing):
                 seen[chunk_key] = dict(doc)
                 if existing_source and existing_source not in new_source:
                     seen[chunk_key]["source_sub_query"] = (
@@ -69,6 +69,23 @@ def merge_sub_results(sub_results: list[list[dict]], top_k: int) -> list[dict]:
                     f"{existing_source}; {new_source}" if existing_source else new_source
                 )
 
-    merged = sorted(seen.values(), key=lambda d: d["score"], reverse=True)
+    merged = sorted(seen.values(), key=_doc_score, reverse=True)
     logger.info(f"子结果合并: {len(sub_results)} 组 → {len(merged)} 条（去重后）")
     return merged[:top_k]
+
+
+def _doc_key(doc: dict) -> str:
+    """优先使用稳定 chunk 标识，缺失时用文本兜底，避免不同片段被合并。"""
+    for key in ("id", "chunk_id", "doc_id"):
+        value = doc.get(key)
+        if value is not None:
+            return f"{key}:{value}"
+    return f"text:{str(doc.get('text') or doc.get('content') or '')[:200]}"
+
+
+def _doc_score(doc: dict) -> float:
+    """兼容融合、重排和原始检索分数字段。"""
+    for key in ("score", "fusion_score", "rerank_score"):
+        if doc.get(key) is not None:
+            return float(doc[key])
+    return 0.0

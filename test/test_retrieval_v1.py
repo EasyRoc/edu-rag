@@ -138,6 +138,20 @@ class VectorStoreScoreTests(unittest.TestCase):
         self.assertEqual(dense[0]["score"], 0.9)
         self.assertEqual(sparse[0]["score"], 12.0)
 
+    def test_multi_query_fusion_does_not_collapse_distinct_docs_without_id(self):
+        from core.strategies.multi_query import multi_query_fusion
+
+        fused = multi_query_fusion(
+            [
+                [{"text": "不同片段A", "score": 0.9}],
+                [{"text": "不同片段B", "score": 0.8}],
+            ],
+            top_k=10,
+        )
+
+        self.assertEqual(len(fused), 2)
+        self.assertEqual({doc["text"] for doc in fused}, {"不同片段A", "不同片段B"})
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

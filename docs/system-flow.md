@@ -535,6 +535,9 @@ DECOMPOSITION 候选 docs
     │   ├── observe 模式 → accept (仅记录日志)
     │   └── enforce 模式 → abstain
     │
+    ├── 复杂问题子问题覆盖不足？
+    │   └── YES → retry + complex_repair / abstain
+    │
     ├── 质量合格？(达到当前复杂度的 top1 阈值且 relevant_count >= 1)
     │   └── YES → accept
     │
@@ -567,7 +570,10 @@ DECOMPOSITION 候选 docs
 | `top1_score` | 最高重排序得分 |
 | `topk_mean_score` | top-k 平均得分 |
 | `top1_margin` | top1 与 top2 的得分差距 |
-| `coverage_ratio` | 相关文档占候选的比例 |
+| `coverage_ratio` | 复杂问题已覆盖子问题数 / 总子问题数，普通问题为 `None` |
+| `covered_subquery_count` | 有达标证据的子问题数量 |
+| `missing_subqueries` | 没有达标相关证据的子问题 |
+| `weak_subqueries` | 有候选但 top1 未达到复杂问题阈值的子问题 |
 
 ## 2.6 Node 5: Generate（流式生成）
 
@@ -673,11 +679,22 @@ retrieve → rerank → retrieval_gate
               │         ▼
               └── retry_planner
                    (制定重试策略:
-                    Retry1: 原问题 + 最多 3 个去重 query variants
-                    Retry2: 按门控原因选择 HyDE 或 Step-Back)
+                    普通问题 Retry1: 原问题 + query variants
+                    普通问题 Retry2: HyDE 或 Step-Back
+                    复杂问题: complex_repair 按子问题定向修复)
 ```
 
 最多重试 `MAX_RETRIES=2` 次。每次重试使用不同的策略，避免陷入同一种失败模式。
+
+复杂问题的 `complex_repair` 会保留原始 `sub_queries`，并为每个子问题生成修复动作：
+
+| 子问题状态 | 修复动作 |
+|------------|----------|
+| `covered` | `direct`，重新直接检索该子问题 |
+| `missing` | `hyde`，用子问题生成假设答案补检 |
+| `weak` | `step_back`，生成更抽象问题补检 |
+
+修复后的候选仍带 `source_sub_query`，因此后续会继续走两阶段重排和子答案合成，不会退化成普通单查询生成。
 
 ---
 

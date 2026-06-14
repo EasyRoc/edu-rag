@@ -68,6 +68,62 @@ class RetryPlannerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(plan, {"strategy": "step_back", "queries": ["原问题"]})
 
+    async def test_complex_retry_uses_sub_query_repair_plan(self):
+        from core.nodes.retriever import build_retry_plan
+
+        decision = {
+            "suggested_strategy": "hyde",
+            "suggested_plan": {
+                "strategy": "complex_repair",
+                "subqueries": [
+                    {"query": "子问题A", "status": "covered", "repair": "direct"},
+                    {"query": "子问题B", "status": "missing", "repair": "hyde"},
+                ],
+            },
+        }
+
+        plan = await build_retry_plan(
+            query="复杂原问题",
+            next_retry_count=1,
+            decision=decision,
+            complexity="complex",
+            sub_queries=["子问题A", "子问题B"],
+        )
+
+        self.assertEqual(plan["strategy"], "complex_repair")
+        self.assertEqual(plan["sub_queries"], ["子问题A", "子问题B"])
+        repairs = {item["query"]: item["repair"] for item in plan["subqueries"]}
+        self.assertEqual(repairs, {"子问题A": "direct", "子问题B": "hyde"})
+
+    async def test_complex_retry_retrieve_preserves_sub_queries_and_sources(self):
+        from core.nodes.retriever import hybrid_retrieve
+
+        store = FakeStore(
+            [
+                [{"id": 1, "doc_id": "a", "text": "A", "score": 0.9}],
+                [{"id": 2, "doc_id": "b", "text": "B", "score": 0.8}],
+            ]
+        )
+        plan = {
+            "strategy": "complex_repair",
+            "sub_queries": ["子问题A", "子问题B"],
+            "subqueries": [
+                {"query": "子问题A", "status": "covered", "repair": "direct"},
+                {"query": "子问题B", "status": "covered", "repair": "direct"},
+            ],
+        }
+
+        docs, sub_queries = await hybrid_retrieve(
+            vector_store=store,
+            query="复杂原问题",
+            complexity="complex",
+            retrieval_plan=plan,
+            candidate_top_k=10,
+        )
+
+        self.assertEqual(sub_queries, ["子问题A", "子问题B"])
+        self.assertEqual({doc["source_sub_query"] for doc in docs}, {"子问题A", "子问题B"})
+
 
 class GraphRoutingTests(unittest.IsolatedAsyncioTestCase):
     async def test_high_quality_docs_reach_generate(self):
@@ -131,6 +187,42 @@ class GraphRoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(final_state["retry_count"], 1)
         self.assertEqual(final_state["retrieval_decision"]["action"], "accept")
         self.assertGreaterEqual(len(store.calls), 2)
+
+    async def test_complex_retry_keeps_synthesis_path_after_recovery(self):
+        from core.graph import build_rag_graph
+
+        store = FakeStore(
+            [
+                [{"id": 1, "doc_id": "a1", "text": "A 初始证据", "score": 0.8, "quality": 0.8}],
+                [{"id": 2, "doc_id": "b1", "text": "B 初始弱证据", "score": 0.1, "quality": 0.1}],
+                [{"id": 3, "doc_id": "a2", "text": "A 修复证据", "score": 0.8, "quality": 0.8}],
+                [{"id": 4, "doc_id": "b2", "text": "B 修复证据", "score": 0.75, "quality": 0.75}],
+                [{"id": 5, "doc_id": "b3", "text": "B HyDE 修复证据", "score": 0.72, "quality": 0.72}],
+            ]
+        )
+        graph = build_rag_graph(store, FakeReranker(), checkpointer=False)
+
+        with (
+            patch("core.graph.classify_intent_async", new=AsyncMock(return_value="educational")),
+            patch("core.graph.classify_query_with_fallback", new=AsyncMock(return_value="complex")),
+            patch(
+                "core.nodes.retriever.decompose_query",
+                new=AsyncMock(return_value=["子问题A", "子问题B"]),
+            ),
+            patch(
+                "core.nodes.retriever.generate_hypothetical_answer",
+                new=AsyncMock(return_value="子问题B 的假设答案"),
+            ),
+            patch("core.graph.generate_sub_answers", new=AsyncMock(return_value=[("子问题A", "A答案"), ("子问题B", "B答案")])),
+            patch("core.graph.synthesize_final_answer", new=AsyncMock(return_value="综合回答")) as synthesis,
+        ):
+            final_state = await graph.ainvoke(_initial_state(max_retries=1))
+
+        self.assertEqual(final_state["answer"], "综合回答")
+        self.assertEqual(final_state["retry_count"], 1)
+        self.assertEqual(final_state["sub_queries"], ["子问题A", "子问题B"])
+        self.assertEqual(final_state["retrieval_decision"]["action"], "accept")
+        synthesis.assert_awaited_once()
 
 
 class StreamQueueTests(unittest.IsolatedAsyncioTestCase):

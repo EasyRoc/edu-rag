@@ -56,6 +56,62 @@ class TestComplexityGradedGate(unittest.TestCase):
 
         self.assertEqual(decision["action"], "accept")
 
+    def test_complex_retries_when_sub_query_coverage_is_incomplete(self):
+        from core.retrieval_quality import evaluate_retrieval_gate
+
+        docs = [
+            {
+                "id": 1,
+                "text": "A 的强证据",
+                "rerank_score": 0.82,
+                "source_sub_query": "子问题A",
+            },
+            {
+                "id": 2,
+                "text": "A 的补充证据",
+                "rerank_score": 0.70,
+                "source_sub_query": "子问题A",
+            },
+        ]
+
+        decision = evaluate_retrieval_gate(
+            docs,
+            complexity="complex",
+            sub_queries=["子问题A", "子问题B"],
+            retry_count=0,
+            max_retries=1,
+        )
+
+        self.assertEqual(decision["action"], "retry")
+        self.assertIn("subquery_coverage_low", decision["reason_codes"])
+        self.assertEqual(decision["metrics"]["covered_subquery_count"], 1)
+        self.assertEqual(decision["metrics"]["total_subquery_count"], 2)
+        self.assertAlmostEqual(decision["metrics"]["coverage_ratio"], 0.5)
+        self.assertEqual(decision["suggested_plan"]["strategy"], "complex_repair")
+        repairs = {item["query"]: item["repair"] for item in decision["suggested_plan"]["subqueries"]}
+        self.assertEqual(repairs["子问题B"], "hyde")
+
+    def test_complex_abstains_when_sub_query_coverage_still_incomplete_after_retry_limit(self):
+        from core.retrieval_quality import evaluate_retrieval_gate
+
+        decision = evaluate_retrieval_gate(
+            [
+                {
+                    "id": 1,
+                    "text": "A 的强证据",
+                    "rerank_score": 0.82,
+                    "source_sub_query": "子问题A",
+                }
+            ],
+            complexity="complex",
+            sub_queries=["子问题A", "子问题B"],
+            retry_count=1,
+            max_retries=1,
+        )
+
+        self.assertEqual(decision["action"], "abstain")
+        self.assertIn("subquery_coverage_low", decision["reason_codes"])
+
 
 class TestSubQueryAnnotation(unittest.TestCase):
     def test_merge_annotates_sub_query_source(self):
@@ -81,6 +137,17 @@ class TestSubQueryAnnotation(unittest.TestCase):
         self.assertEqual(len(merged), 1)
         self.assertIn("子问题A", merged[0]["source_sub_query"])
         self.assertIn("子问题B", merged[0]["source_sub_query"])
+
+    def test_merge_does_not_collapse_distinct_docs_without_id(self):
+        from core.strategies.decomposition import merge_sub_results
+
+        sub1 = [{"text": "不同片段A", "score": 0.9, "source_sub_query": "子问题A"}]
+        sub2 = [{"text": "不同片段B", "score": 0.8, "source_sub_query": "子问题B"}]
+
+        merged = merge_sub_results([sub1, sub2], top_k=10)
+
+        self.assertEqual(len(merged), 2)
+        self.assertEqual({doc["text"] for doc in merged}, {"不同片段A", "不同片段B"})
 
     def test_state_has_sub_queries_field(self):
         from core.state import RAGState

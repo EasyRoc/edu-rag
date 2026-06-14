@@ -47,12 +47,12 @@ def multi_query_fusion(all_results: list[list[dict]], top_k: int, rrf_k: int = 6
     if not all_results:
         return []
 
-    score_map: dict[int, float] = defaultdict(float)
-    doc_map: dict[int, dict] = {}
+    score_map: dict[str, float] = defaultdict(float)
+    doc_map: dict[str, dict] = {}
 
     for result_list in all_results:
         for rank, doc in enumerate(result_list):
-            chunk_key = doc.get("id", 0)
+            chunk_key = _doc_key(doc)
             score_map[chunk_key] += 1.0 / (rrf_k + rank + 1)
             if chunk_key not in doc_map:
                 doc_map[chunk_key] = dict(doc)
@@ -77,3 +77,12 @@ def multi_query_fusion(all_results: list[list[dict]], top_k: int, rrf_k: int = 6
 
     logger.info(f"多查询融合: {len(all_results)} 路结果 → {len(results)} 条")
     return results
+
+
+def _doc_key(doc: dict) -> str:
+    """生成稳定去重 key；缺少 id 时不要把所有片段折叠到同一个 0。"""
+    for key in ("id", "chunk_id", "doc_id"):
+        value = doc.get(key)
+        if value is not None:
+            return f"{key}:{value}"
+    return f"text:{str(doc.get('text') or doc.get('content') or '')[:200]}"

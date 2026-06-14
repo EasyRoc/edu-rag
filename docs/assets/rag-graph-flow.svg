@@ -5,7 +5,7 @@
   <rect x="0" y="0" width="1240" height="680" fill="#fbfdff"/>
 
   <text x="40" y="42" font-family="Arial, sans-serif" font-size="22" font-weight="700" fill="#0f172a">Edu-RAG RAG Graph</text>
-  <text x="40" y="68" font-family="Arial, sans-serif" font-size="13" fill="#475569">主流程保持稳定；复杂问题在 rerank 和 generate 内部启用深度处理分支。</text>
+  <text x="40" y="68" font-family="Arial, sans-serif" font-size="13" fill="#475569">主流程保持稳定；复杂问题在 rerank、gate 和 generate 内部启用深度处理分支。</text>
 
   <rect x="42" y="158" width="128" height="76" rx="10" fill="#e0f2fe" stroke="#0284c7" stroke-width="1.5"/>
   <text x="75" y="187" font-family="Arial, sans-serif" font-size="16" font-weight="700" fill="#0f172a">classify</text>
@@ -25,7 +25,7 @@
 
   <rect x="656" y="146" width="154" height="100" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/>
   <text x="675" y="179" font-family="Arial, sans-serif" font-size="16" font-weight="700" fill="#0f172a">retrieval_gate</text>
-  <text x="676" y="203" font-family="Arial, sans-serif" font-size="12" fill="#334155">只读 rerank_score</text>
+  <text x="676" y="203" font-family="Arial, sans-serif" font-size="12" fill="#334155">rerank_score + 覆盖</text>
   <text x="683" y="223" font-family="Arial, sans-serif" font-size="12" fill="#334155">accept / retry / abstain</text>
 
   <rect x="892" y="64" width="132" height="76" rx="10" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
@@ -38,8 +38,8 @@
 
   <rect x="892" y="306" width="132" height="86" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/>
   <text x="913" y="334" font-family="Arial, sans-serif" font-size="16" font-weight="700" fill="#0f172a">retry_planner</text>
-  <text x="912" y="359" font-family="Arial, sans-serif" font-size="12" fill="#334155">query variants</text>
-  <text x="922" y="377" font-family="Arial, sans-serif" font-size="12" fill="#334155">HyDE / Step-Back</text>
+  <text x="908" y="359" font-family="Arial, sans-serif" font-size="12" fill="#334155">普通: variants</text>
+  <text x="902" y="377" font-family="Arial, sans-serif" font-size="12" fill="#334155">复杂: 子问题修复</text>
 
   <rect x="1100" y="158" width="98" height="76" rx="10" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5"/>
   <text x="1125" y="187" font-family="Arial, sans-serif" font-size="16" font-weight="700" fill="#0f172a">finalize</text>
@@ -66,15 +66,15 @@
   <rect x="40" y="472" width="344" height="150" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
   <text x="62" y="501" font-family="Arial, sans-serif" font-size="16" font-weight="700" fill="#0f172a">统一门控规则</text>
   <text x="62" y="528" font-family="Arial, sans-serif" font-size="13" fill="#334155">default: top1 &gt;= 0.60 且相关候选 &gt;= 0.50</text>
-  <text x="62" y="552" font-family="Arial, sans-serif" font-size="13" fill="#334155">complex: top1 &gt;= 0.45 且相关候选 &gt;= 0.35</text>
-  <text x="62" y="576" font-family="Arial, sans-serif" font-size="13" fill="#334155">无候选、低分、重排不可用 -> retry 或 abstain</text>
+  <text x="62" y="552" font-family="Arial, sans-serif" font-size="13" fill="#334155">complex: top1 &gt;= 0.45, 相关 &gt;= 0.35, 子问题全覆盖</text>
+  <text x="62" y="576" font-family="Arial, sans-serif" font-size="13" fill="#334155">无候选、低分、覆盖不足 -> retry 或 abstain</text>
   <text x="62" y="600" font-family="Arial, sans-serif" font-size="13" fill="#334155">RRF 只做候选排序，不做质量判断</text>
 
   <rect x="424" y="472" width="344" height="150" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
   <text x="446" y="501" font-family="Arial, sans-serif" font-size="16" font-weight="700" fill="#0f172a">重试策略</text>
-  <text x="446" y="528" font-family="Arial, sans-serif" font-size="13" fill="#334155">第 1 次：原问题 + 最多 3 个去重 query variants</text>
-  <text x="446" y="552" font-family="Arial, sans-serif" font-size="13" fill="#334155">第 2 次：按门控原因选择 HyDE 或 Step-Back</text>
-  <text x="446" y="576" font-family="Arial, sans-serif" font-size="13" fill="#334155">所有重试统一经过 retrieve -> rerank -> gate</text>
+  <text x="446" y="528" font-family="Arial, sans-serif" font-size="13" fill="#334155">普通问题：variants -> HyDE / Step-Back</text>
+  <text x="446" y="552" font-family="Arial, sans-serif" font-size="13" fill="#334155">复杂问题：complex_repair 按子问题修复</text>
+  <text x="446" y="576" font-family="Arial, sans-serif" font-size="13" fill="#334155">重试后继续经过 retrieve -> rerank -> gate</text>
   <text x="446" y="600" font-family="Arial, sans-serif" font-size="13" fill="#334155">MAX_RETRIES 默认限制在 0..2</text>
 
   <rect x="806" y="454" width="392" height="184" rx="12" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5"/>

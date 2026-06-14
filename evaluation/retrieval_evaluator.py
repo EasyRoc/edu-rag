@@ -11,6 +11,7 @@ from statistics import mean
 from typing import Any
 
 from config import settings
+from core.graph import _should_use_two_stage_rerank, _two_stage_rerank
 from core.nodes.retriever import build_retry_plan, hybrid_retrieve
 from core.reranker import CrossEncoderReranker, RerankerUnavailableError
 from core.retrieval_quality import evaluate_retrieval_gate
@@ -150,10 +151,11 @@ async def evaluate_retrieval_case(
     total_started = time.perf_counter()
     docs: list[dict] = []
     decision: dict = {}
+    sub_queries: list[str] = []
 
     while True:
         started = time.perf_counter()
-        docs, _sub_queries = await hybrid_retrieve(
+        docs, retrieved_sub_queries = await hybrid_retrieve(
             vector_store=vector_store,
             query=case["question"],
             complexity=case.get("complexity", "medium"),
@@ -162,10 +164,19 @@ async def evaluate_retrieval_case(
             retrieval_plan=plan,
             candidate_top_k=settings.RETRIEVAL_CANDIDATE_TOP_K,
         )
+        if retrieved_sub_queries:
+            sub_queries = retrieved_sub_queries
         retrieval_latency_ms += (time.perf_counter() - started) * 1000
         started = time.perf_counter()
         try:
-            docs = await reranker.rerank(case["question"], docs)
+            if _should_use_two_stage_rerank(
+                case.get("complexity", "medium"),
+                sub_queries,
+                settings.ENABLE_DEEP_COMPLEX_MODE,
+            ):
+                docs = await _two_stage_rerank(case["question"], docs, sub_queries, reranker)
+            else:
+                docs = await reranker.rerank(case["question"], docs)
             reranker_available = True
         except RerankerUnavailableError:
             reranker_available = False
@@ -176,6 +187,7 @@ async def evaluate_retrieval_case(
             max_retries=settings.MAX_RETRIES,
             reranker_available=reranker_available,
             complexity=case.get("complexity", "medium"),
+            sub_queries=sub_queries,
         )
         initial_action = initial_action or decision["action"]
         if decision["action"] != "retry":
@@ -185,6 +197,8 @@ async def evaluate_retrieval_case(
             query=case["question"],
             next_retry_count=retry_count,
             decision=decision,
+            complexity=case.get("complexity", "medium"),
+            sub_queries=sub_queries,
         )
 
     relevant_ids = {int(chunk_id) for chunk_id in case.get("relevant_chunk_ids", [])}
