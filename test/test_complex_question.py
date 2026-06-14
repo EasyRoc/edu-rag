@@ -191,6 +191,22 @@ class FakeTwoStageReranker:
         return sorted(ranked, key=lambda item: item["rerank_score"], reverse=True)
 
 
+class RecordingTwoStageReranker:
+    def __init__(self):
+        self.queries: list[str] = []
+
+    async def rerank(self, query: str, docs: list[dict]) -> list[dict]:
+        self.queries.append(query)
+        ranked = []
+        for doc in docs:
+            item = dict(doc)
+            item["rerank_raw_score"] = float(item.get("quality", item.get("score", 0.5)))
+            item["rerank_score"] = float(item.get("quality", item.get("score", 0.5)))
+            item["rerank_query"] = query
+            ranked.append(item)
+        return sorted(ranked, key=lambda item: item["rerank_score"], reverse=True)
+
+
 class TestTwoStageRerank(unittest.TestCase):
     def test_two_stage_rerank_preserves_sub_query_sources(self):
         from core.graph import _two_stage_rerank
@@ -214,6 +230,27 @@ class TestTwoStageRerank(unittest.TestCase):
         sources = {doc.get("source_sub_query", "") for doc in final}
         self.assertTrue(any("勾股定理" in source for source in sources))
         self.assertTrue(any("相似三角形" in source for source in sources))
+
+    def test_two_stage_rerank_does_not_rerank_merged_docs_with_original_query(self):
+        from core.graph import _two_stage_rerank
+
+        reranker = RecordingTwoStageReranker()
+        docs = [
+            {"id": 1, "text": "A 证据", "quality": 0.9, "source_sub_query": "子问题A"},
+            {"id": 2, "text": "B 证据", "quality": 0.8, "source_sub_query": "子问题B"},
+        ]
+
+        final = asyncio.run(
+            _two_stage_rerank(
+                "复杂原问题",
+                docs,
+                ["子问题A", "子问题B"],
+                reranker,
+            )
+        )
+
+        self.assertEqual(reranker.queries, ["子问题A", "子问题B"])
+        self.assertEqual({doc["rerank_query"] for doc in final}, {"子问题A", "子问题B"})
 
 
 class TestSubAnswerSynthesis(unittest.TestCase):

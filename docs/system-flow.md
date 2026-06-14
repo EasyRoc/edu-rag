@@ -312,7 +312,7 @@ BM25 索引存储在内存中，用于混合检索（Milvus 向量 + BM25 关键
 ┌──────────────────────────────────────────────┐
 │  Node 3: rerank (重排序)                       │
 │  CrossEncoder (bge-reranker-base) 逐对打分     │
-│  普通问题单阶段；复杂问题可两阶段重排             │
+│  普通问题单阶段；复杂问题可按子问题重排           │
 └──────────────┬───────────────────────────────┘
                │
                ▼
@@ -434,7 +434,7 @@ BM25 索引存储在内存中，用于混合检索（Milvus 向量 + BM25 关键
 2. 每个子问题独立执行 `hybrid_search`
 3. 每个候选片段标注 `source_sub_query`，记录“这个 chunk 是被哪个子问题召回的”
 4. 所有子问题结果合并，按 chunk id 去重；如果同一个 chunk 被多个子问题召回，合并保留多个来源
-5. 返回 `(docs, sub_queries)`，Graph State 会携带 `sub_queries` 供后续两阶段重排和子答案合成使用
+5. 返回 `(docs, sub_queries)`，Graph State 会携带 `sub_queries` 供后续子问题感知重排和子答案合成使用
 
 拆解降级：
 
@@ -492,7 +492,7 @@ Sigmoid 归一化 → [0, 1] 区间
 - 整个过程在 `asyncio.to_thread()` 中执行，不阻塞事件循环
 - 如果模型加载失败或被禁用，设置 `reranker_available=False`，文档原样通过
 
-### 2.4.3 复杂问题两阶段重排
+### 2.4.3 复杂问题子问题感知重排
 
 触发条件：
 
@@ -509,22 +509,20 @@ DECOMPOSITION 候选 docs
     │
     ├── 按 source_sub_query 分组
     │
-    ├── Stage 1: rerank(sub_query, docs_by_sub_query)
+    ├── rerank(sub_query, docs_by_sub_query)
     │       每个子问题保留 SUB_RERANK_TOP_K 条
     │
-    ├── 合并去重
-    │
-    └── Stage 2: rerank(original_query, merged_docs)
-            输出最终候选列表
+    └── 合并去重
+            输出候选列表，保留子问题 rerank_score
 ```
 
-这样做的目的：避免“只覆盖某个子方向的有效 chunk”因为无法匹配原始复杂问题的全部要求而被压低分。RRF 仍只负责候选排序，门控质量判断只读取 `[0,1]` 范围内的 `rerank_score`。
+这样做的目的：避免“只覆盖某个子方向的有效 chunk”因为无法匹配原始复杂问题的全部要求而被压低分。当前实现不再对合并后的候选执行 `rerank(original_query, merged_docs)`，因此 `rerank_score` 保持为“候选对所属子问题的相关性分数”，后续子问题覆盖门控可以直接使用它。RRF 仍只负责候选排序，不参与质量判断。
 
 ## 2.5 Node 4: Retrieval Gate（检索质量门控）
 
 文件：`core/retrieval_quality.py:evaluate_retrieval_gate()`
 
-### 2.5.1 三分支决策
+### 2.5.1 五分支决策
 
 ```
 检索结果
@@ -612,7 +610,7 @@ reranked 文档列表 (top 8 = COMPLEX_CONTEXT_TOP_K)
            └── 最终合成使用 SYNTHESIS_MAX_TOKENS=4096
 ```
 
-复杂路径的触发条件与两阶段重排一致：`complexity == "complex"`、`sub_queries >= 2`、`ENABLE_DEEP_COMPLEX_MODE=true`。如果未配置 `LLM_API_KEY`，复杂路径会退回 `_mock_answer()`，保证本地 smoke 流程仍可运行。
+复杂路径的触发条件与子问题感知重排一致：`complexity == "complex"`、`sub_queries >= 2`、`ENABLE_DEEP_COMPLEX_MODE=true`。如果未配置 `LLM_API_KEY`，复杂路径会退回 `_mock_answer()`，保证本地 smoke 流程仍可运行。
 
 ### 2.6.2 Token 预算管理
 
@@ -694,7 +692,7 @@ retrieve → rerank → retrieval_gate
 | `missing` | `hyde`，用子问题生成假设答案补检 |
 | `weak` | `step_back`，生成更抽象问题补检 |
 
-修复后的候选仍带 `source_sub_query`，因此后续会继续走两阶段重排和子答案合成，不会退化成普通单查询生成。
+修复后的候选仍带 `source_sub_query`，因此后续会继续走子问题感知重排和子答案合成，不会退化成普通单查询生成。
 
 ---
 

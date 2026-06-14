@@ -147,7 +147,7 @@ async def build_retry_plan(
     普通问题沿用渐进式重试：第一次 query variants 盲扩，第二次根据门控
     建议选择 HyDE 或 Step-Back。复杂问题如果携带多个 `sub_queries`，则优先
     执行门控给出的 `complex_repair` 计划，按子问题分别 direct / hyde /
-    step_back 修复，避免重试后丢失两阶段重排与子答案合成能力。
+    step_back 修复，避免重试后丢失子问题感知重排与子答案合成能力。
     """
     clean_sub_queries = _dedupe_queries(sub_queries or [])
     suggested_plan = decision.get("suggested_plan")

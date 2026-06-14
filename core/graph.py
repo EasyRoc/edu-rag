@@ -125,7 +125,7 @@ def _should_use_two_stage_rerank(
     sub_queries: list[str],
     deep_mode_enabled: bool,
 ) -> bool:
-    """复杂问题且存在多个子问题时启用两阶段重排。"""
+    """复杂问题且存在多个子问题时启用子问题感知重排。"""
     return complexity == "complex" and len(sub_queries) >= 2 and deep_mode_enabled
 
 
@@ -135,7 +135,7 @@ async def _two_stage_rerank(
     sub_queries: list[str],
     reranker: CrossEncoderReranker,
 ) -> list[dict]:
-    """两阶段重排：子问题独立 rerank 后，再用原问题做最终 rerank。"""
+    """子问题感知重排：子问题独立 rerank 后合并，避免原问题二次打分压低局部证据。"""
     if not docs:
         return []
 
@@ -167,12 +167,12 @@ async def _two_stage_rerank(
         merged.append(doc)
 
     logger.info(
-        "两阶段重排: stage1_groups=%d, stage1_docs=%d, merged=%d",
+        "子问题感知重排: stage1_groups=%d, stage1_docs=%d, merged=%d",
         len(grouped),
         len(stage1_results),
         len(merged),
     )
-    return await reranker.rerank(original_query, merged)
+    return merged
 
 
 async def retrieval_gate_node(state: RAGState) -> dict:

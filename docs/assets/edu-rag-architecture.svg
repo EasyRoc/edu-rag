@@ -49,7 +49,7 @@
   <text x="580" y="269" font-family="Arial, sans-serif" font-size="14" fill="#1e293b">LangGraph RAG</text>
   <text x="548" y="291" font-family="Arial, sans-serif" font-size="12" fill="#475569">classify / retrieve / rerank / gate</text>
   <text x="552" y="309" font-family="Arial, sans-serif" font-size="12" fill="#475569">retry / abstain / finalize</text>
-  <text x="552" y="327" font-family="Arial, sans-serif" font-size="12" fill="#475569">复杂问题: 两阶段 rerank + 合成</text>
+  <text x="548" y="327" font-family="Arial, sans-serif" font-size="12" fill="#475569">复杂问题: 子问题 rerank + 合成</text>
   <rect x="530" y="362" width="214" height="64" rx="8" fill="#fef3c7" stroke="#d97706" stroke-width="1.2"/>
   <text x="572" y="388" font-family="Arial, sans-serif" font-size="14" fill="#1e293b">DocumentService</text>
   <text x="561" y="410" font-family="Arial, sans-serif" font-size="12" fill="#475569">上传、删除、SQL 导入</text>

@@ -107,7 +107,7 @@ python main.py
 | 意图分类 | 教育问题进入 RAG；非教育问题进入 `chitchat` 分支 |
 | 多策略召回 | `direct`、`multi_query`、`decomposition`，复杂问题会携带 `sub_queries` 与 `source_sub_query` |
 | 混合检索 | Milvus COSINE 稠密检索 + 本地 BM25 稀疏检索 + RRF 候选融合 |
-| 重排与门控 | `BAAI/bge-reranker-base` CrossEncoder 懒加载；复杂问题支持子问题感知两阶段重排与覆盖门控 |
+| 重排与门控 | `BAAI/bge-reranker-base` CrossEncoder 懒加载；复杂问题支持子问题感知重排与覆盖门控 |
 | 复杂问题生成 | `complex + 多子问题` 可走子答案并行生成 + 最终合成，普通问题仍走原流式生成 |
 | 低质量拒答 | 检索证据不足时不进入 LLM 生成，返回固定拒答提示 |
 | 文档管理 | 上传 PDF / Markdown / TXT，列表查询，删除文档和对应向量 |
@@ -143,7 +143,7 @@ classify
 - `build_rag_graph(vector_store, reranker=None, checkpointer=None)` 通过闭包注入向量库和重排器，不把不可序列化对象塞进 Graph State。
 - 默认使用 `MemorySaver` 做本地会话记忆，`RAGService` 使用 `session_id` 作为 LangGraph `thread_id`。
 - `retrieve` 只负责召回候选，不判断质量；复杂问题的 `decomposition` 会把拆出的 `sub_queries` 写入 Graph State，并给候选片段标注 `source_sub_query`。
-- `rerank` 负责 CrossEncoder 重排；普通问题走单阶段重排，复杂问题在 `ENABLE_DEEP_COMPLEX_MODE=true` 且存在多个子问题时走“两阶段重排”：先按子问题独立 rerank，再用原问题做最终 rerank。
+- `rerank` 负责 CrossEncoder 重排；普通问题走单阶段重排，复杂问题在 `ENABLE_DEEP_COMPLEX_MODE=true` 且存在多个子问题时按子问题独立 rerank，然后合并去重，不再用原问题二次重排压低局部证据。
 - `retrieval_gate` 使用 [core/retrieval_quality.py](core/retrieval_quality.py) 的统一门控逻辑，只看 `rerank_score`，不再把 RRF 分数当作质量分；复杂问题还会检查每个 `sub_query` 是否有达标证据。
 - `retry_planner` 对普通问题保留 query variants / HyDE / Step-Back；对复杂问题使用 `complex_repair`，按缺失或低分的子问题定向补检，并继续保留 `sub_queries`。
 - `generate` 只有在门控通过后执行；复杂问题会先并行生成子答案，再通过 `synthesize_final_answer()` 合成最终回答。
@@ -174,7 +174,7 @@ classify
 decomposition retrieve
   -> docs + sub_queries + source_sub_query
   -> rerank(sub_query, docs_by_sub_query)
-  -> merge + rerank(original_query, merged_docs)
+  -> merge_dedup(keep sub-query rerank_score)
   -> retrieval_gate(top1 + per-sub-query coverage)
   -> retry_planner(complex_repair) -> retrieve(sub-query repair)  # 如有缺失/弱覆盖
   -> generate_sub_answers(sub_queries)
@@ -343,7 +343,7 @@ curl -X POST http://localhost:8000/api/v1/documents/upload \
 | `MULTI_QUERY_VARIANTS` | `4` | 中等问题多查询改写数量 |
 | `DECOMPOSITION_MAX_SUB` | `4` | 复杂问题最多拆解出的子问题数量 |
 | `STRATEGY_TIMEOUT` | `10` | 多策略 LLM 调用超时，单位秒 |
-| `ENABLE_DEEP_COMPLEX_MODE` | `true` | 是否启用复杂问题两阶段重排和子答案合成 |
+| `ENABLE_DEEP_COMPLEX_MODE` | `true` | 是否启用复杂问题子问题感知重排和子答案合成 |
 | `SUB_RERANK_TOP_K` | `6` | 复杂问题第一阶段每个子问题保留的重排候选数 |
 | `COMPLEX_ACCEPT_TOP1_THRESHOLD` | `0.45` | 复杂问题 top1 接受阈值 |
 | `COMPLEX_RELEVANCE_THRESHOLD` | `0.35` | 复杂问题相关候选阈值 |

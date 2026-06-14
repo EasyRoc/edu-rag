@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1240" height="680" viewBox="0 0 1240 680" role="img" aria-labelledby="title desc">
   <title id="title">Edu-RAG LangGraph 流程图</title>
-  <desc id="desc">展示当前 RAG Graph 从分类、检索、重排、门控、生成、拒答到重试的完整节点流转，并突出复杂问题的两阶段重排与子答案合成路径。</desc>
+  <desc id="desc">展示当前 RAG Graph 从分类、检索、重排、门控、生成、拒答到重试的完整节点流转，并突出复杂问题的子问题感知重排与子答案合成路径。</desc>
 
   <rect x="0" y="0" width="1240" height="680" fill="#fbfdff"/>
 
@@ -83,8 +83,8 @@
   <text x="849" y="528" font-family="Arial, sans-serif" font-size="12" fill="#334155">sub_queries</text>
   <text x="847" y="546" font-family="Arial, sans-serif" font-size="12" fill="#334155">source_sub_query</text>
   <rect x="976" y="506" width="176" height="52" rx="8" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.2"/>
-  <text x="1000" y="528" font-family="Arial, sans-serif" font-size="12" fill="#334155">两阶段 rerank</text>
-  <text x="996" y="546" font-family="Arial, sans-serif" font-size="12" fill="#334155">子问题 -> 原问题</text>
+  <text x="996" y="528" font-family="Arial, sans-serif" font-size="12" fill="#334155">子问题 rerank</text>
+  <text x="1000" y="546" font-family="Arial, sans-serif" font-size="12" fill="#334155">合并去重</text>
   <rect x="830" y="580" width="142" height="40" rx="8" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.2"/>
   <text x="853" y="605" font-family="Arial, sans-serif" font-size="12" fill="#334155">并行生成子答案</text>
   <rect x="1008" y="580" width="144" height="40" rx="8" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.2"/>
